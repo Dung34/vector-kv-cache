@@ -8,7 +8,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.evaluation.niah_generator import NeedleInHaystackGenerator
+from src.evaluation.niah_generator import NeedleInHaystackGenerator, MultiNeedleGenerator
 from src.evaluation.memory_tracker import LatencyTimer, MemoryTracker
 
 
@@ -22,7 +22,7 @@ class MockTokenizer:
 
 
 class TestNIAHGenerator(unittest.TestCase):
-    def test_prompt_generation(self):
+    def test_single_needle_prompt_generation(self):
         generator = NeedleInHaystackGenerator()
         tokenizer = MockTokenizer()
 
@@ -35,6 +35,21 @@ class TestNIAHGenerator(unittest.TestCase):
         self.assertIn(generator.needle, prompt)
         self.assertIn(generator.query, prompt)
         self.assertEqual(answer, generator.expected_answer)
+
+    def test_multi_needle_prompt_generation(self):
+        generator = MultiNeedleGenerator()
+        tokenizer = MockTokenizer()
+
+        prompt, selected = generator.generate_prompt(
+            tokenizer=tokenizer,
+            target_token_length=300,
+            num_needles=3,
+        )
+
+        self.assertEqual(len(selected), 3)
+        for needle in selected:
+            self.assertIn(needle["passkey"], prompt)
+            self.assertIn(needle["sentence"], prompt)
 
     def test_latency_timer(self):
         timer = LatencyTimer()

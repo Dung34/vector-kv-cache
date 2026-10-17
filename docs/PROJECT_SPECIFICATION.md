@@ -46,7 +46,7 @@ Các phương pháp loại bỏ token hiện nay (như H2O, SnapKV, StreamingLLM
    * Hiện thực hóa cơ chế định tuyến 3 trạng thái: **Retain** (Giữ cả K và V), **Approximate** (Giữ K, xóa V, tái tạo động), và **Evict** (Xóa cả K và V).
 3. **Mục tiêu thực nghiệm:**
    * Nén giảm **$50\% - 75\%$** dung lượng bộ nhớ KV Cache của mô hình `Qwen2.5-1.5B-Instruct`.
-   * Bảo toàn trên **$90\%$** độ chính xác so với Full Cache trên các tác vụ văn bản dài (LongBench) và truy xuất chi tiết (Needle-in-a-Haystack).
+   * Bảo toàn trên **$90\%$** độ chính xác so với Full Cache trên các tác vụ văn bản dài (LongBench) và truy xuất chi tiết (**Single-Needle & Multi-Needle NIAH**).
    * Vượt trội rõ rệt so với thuật toán nén nhị phân thuần túy (H2O Baseline) ở cùng một mức ngân sách VRAM.
 
 ---
@@ -128,7 +128,8 @@ Thử nghiệm trên 4 tỷ lệ nén bộ nhớ ($p_c$):
 | :--- | :--- | :--- | :--- |
 | **Tiết kiệm Bộ nhớ** | Đo đạc trên GPU khi prefill 8K tokens | Peak VRAM (MB), Cache Compression Ratio (x) | Giảm $\ge 60\%$ VRAM so với Full Cache |
 | **Tốc độ Suy luận** | Vòng lặp sinh 128 tokens | TTFT (ms), Throughput (tokens/second) | Throughput không giảm quá $5\%$ so với H2O gốc |
-| **Truy xuất Chi tiết** | **Needle-In-A-Haystack (NIAH)** (4K – 16K context) | Retrieval Accuracy (%) hiển thị qua Heatmap | Accuracy đạt $\ge 95\%$ ở mức nén $75\%$ |
+| **Truy xuất Đơn kim** | **Single-Needle NIAH** (4K – 16K context) | Retrieval Accuracy (%) hiển thị qua Heatmap | Accuracy đạt $\ge 95\%$ ở mức nén $75\%$, xóa bỏ điểm mù (blind spots) của H2O |
+| **Truy xuất Đa kim** | **Multi-Needle NIAH** (3 – 5 cây kim rải rác) | Multi-key Retrieval Recall & Accuracy (%) | Khắc phục hoàn toàn tình trạng mất dữ kiện; vượt trội H2O gốc từ $15\% - 30\%$ ở mức nén cao ($p_c \ge 75\%$) |
 | **Đọc hiểu Dài** | **LongBench** (NarrativeQA, Qasper) | F1 Score, ROUGE-L | Vượt trội hơn H2O gốc từ $5\% - 15\%$ F1 |
 | **Suy luận Toán học** | **GSM8K** (200 câu hỏi) | Exact Match Accuracy (%) | Giữ nguyên $\ge 90\%$ điểm số của Full Cache |
 
@@ -139,11 +140,11 @@ Thử nghiệm trên 4 tỷ lệ nén bộ nhớ ($p_c$):
 | Tuần | Giai đoạn | Nội dung công việc cụ thể | Sản phẩm / Kết quả đạt được |
 | :---: | :--- | :--- | :--- |
 | **1 – 2** | Khởi động & Nghiên cứu | • Nghiên cứu chi tiết paper VECTOR và H2O.<br>• Phân tích cấu trúc module `transformers.Cache`. | Đề cương chi tiết, môi trường ảo PyTorch sẵn sàng. |
-| **3 – 4** | Xây dựng Baseline | • Cài đặt baseline Full FP16 và H2O Binary Eviction.<br>• Viết script đánh giá NIAH và đo VRAM (`torch.cuda.max_memory_allocated`). | Script baseline đo đạc được Peak VRAM và điểm NIAH của H2O. |
+| **3 – 4** | Xây dựng Baseline | • Cài đặt baseline Full FP16 và H2O Binary Eviction.<br>• Viết script đánh giá Single-Needle & Multi-Needle NIAH và đo VRAM (`torch.cuda.max_memory_allocated`). | Script baseline đo đạc được Peak VRAM và điểm NIAH của H2O. |
 | **5 – 6** | Hiệu chuẩn Ngoại tuyến | • Hiện thực thuật toán khử RoPE nghịch đảo ($R_m^{-1}$).<br>• Viết script OLS thu thập dữ liệu trên C4/Wikitext và tính ma trận $W_{\text{OLS}}$. | Checkpoint ma trận $W_{\text{OLS}}$ cho từng tầng của `Qwen2.5-1.5B`. |
 | **7 – 8** | Hiện thực Lớp Cache VECTOR | • Cài đặt lớp `VectorKVCache` hỗ trợ lưu trữ bất đối xứng.<br>• Viết logic 3 bước: nới lỏng ngân sách, tính $\varepsilon_i$, phân nhóm Retain/Approx/Evict. | Unit test chạy pass quá trình prefill và sinh từ không lỗi tensor shape. |
 | **9 – 10** | Tích hợp & Tối ưu hóa | • Tích hợp hook tái tạo $V$ tức thì trong vòng lặp giải mã.<br>• Tinh chỉnh siêu tham số tỷ lệ xấp xỉ $p_a \in [0.1, 0.4]$. | Hệ thống hoàn chỉnh chạy trơn tru từ đầu đến cuối (End-to-End). |
-| **11 – 12** | Thực nghiệm Toàn diện | • Chạy benchmark so sánh: Full vs H2O vs H2O+VECTOR trên 4 mức ngân sách.<br>• Thu thập log VRAM, Throughput, NIAH Heatmap, GSM8K. | Bảng số liệu thô và các đồ thị biểu diễn kết quả. |
+| **11 – 12** | Thực nghiệm Toàn diện | • Chạy benchmark so sánh: Full vs H2O vs H2O+VECTOR trên 4 mức ngân sách.<br>• Thu thập log VRAM, Throughput, NIAH Heatmap (Single/Multi-Needle), GSM8K. | Bảng số liệu thô và các đồ thị biểu diễn kết quả. |
 | **13 – 14** | Viết Báo cáo Đồ án | • Viết tài liệu báo cáo đồ án Project III theo mẫu chuẩn của nhà trường.<br>• Vẽ sơ đồ kiến trúc, phân tích bảng số liệu thực nghiệm. | Bản thảo báo cáo hoàn chỉnh (Bao gồm chương lý thuyết, giải pháp, thực nghiệm). |
 | **15** | Hoàn thiện & Bảo vệ | • Đóng gói mã nguồn lên GitHub, viết README chi tiết.<br>• Làm slide thuyết trình và chuẩn bị demo sản phẩm. | Slide thuyết trình, video/demo thực nghiệm sẵn sàng bảo vệ. |
 
@@ -155,9 +156,9 @@ Thử nghiệm trên 4 tỷ lệ nén bộ nhớ ($p_c$):
 2. **Kho mã nguồn hoàn chỉnh (GitHub Repository):**
    * Module `vector_cache/`: Mã nguồn lớp cache và hook tái tạo.
    * Module `calibration/`: Script tính ma trận OLS tự động.
-   * Module `evaluation/`: Bộ script chạy thực nghiệm đo VRAM, Throughput, NIAH, LongBench.
+   * Module `evaluation/`: Bộ script chạy thực nghiệm đo VRAM, Throughput, NIAH (Single/Multi-Needle), LongBench.
    * File `README.md` hướng dẫn cài đặt và tái lập kết quả chỉ với 1 lệnh chạy.
 3. **Bộ biểu đồ & Trực quan hóa:**
-   * Biểu đồ nhiệt (Heatmap) thể hiện tỷ lệ tìm kiếm thành công "Needle in a Haystack" theo độ dài ngữ cảnh.
+   * Biểu đồ nhiệt (Heatmap) thể hiện tỷ lệ tìm kiếm thành công "Single-Needle & Multi-Needle NIAH" theo độ dài ngữ cảnh và vị trí độ sâu.
    * Biểu đồ Pareto (Trade-off) giữa Tỷ lệ nén bộ nhớ (%) và Điểm chất lượng (F1/Accuracy).
 
