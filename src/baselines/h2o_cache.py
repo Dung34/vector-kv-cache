@@ -173,8 +173,8 @@ class H2OKVCache(DynamicCache):
 
         target_budget = self.active_budget
 
-        # If length is within budget, return full
-        if total_len <= target_budget:
+        # During prefill (incoming_len > 1), preserve all tokens to match the model's causal attention mask
+        if incoming_len > 1 or total_len <= target_budget:
             self._key_cache[layer_idx] = k_full
             self._value_cache[layer_idx] = v_full
             self._sync_dynamic_layers(layer_idx, k_full, v_full)

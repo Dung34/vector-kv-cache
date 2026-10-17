@@ -42,9 +42,10 @@ class TestH2OKVCache(unittest.TestCase):
         k_out, v_out = cache.update(k_mock, v_mock, layer_idx=0)
 
         expected_budget = int((1.0 - compression_ratio) * seq_len)
-        self.assertEqual(k_out.shape, (batch_size, num_heads, expected_budget, head_dim))
-        self.assertEqual(v_out.shape, (batch_size, num_heads, expected_budget, head_dim))
-        self.assertEqual(cache.get_seq_length(layer_idx=0), expected_budget)
+        # Prefill preserves all tokens so causal attention mask in Hugging Face matches
+        self.assertEqual(k_out.shape, (batch_size, num_heads, seq_len, head_dim))
+        self.assertEqual(v_out.shape, (batch_size, num_heads, seq_len, head_dim))
+        self.assertEqual(cache.get_seq_length(layer_idx=0), seq_len)
 
         # Test decoding step: append 1 token
         k_step = torch.randn(batch_size, num_heads, 1, head_dim)
