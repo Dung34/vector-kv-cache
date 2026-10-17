@@ -48,6 +48,15 @@ class FullKVCacheWrapper(DynamicCache):
     def name(self) -> str:
         return "Full-FP16-Cache"
 
+    def reset_scores(self):
+        """Reset cached states for a fresh sequence generation."""
+        if hasattr(self, "layers"):
+            self.layers = []
+        if hasattr(self, "key_cache_list"):
+            self.key_cache_list = []
+        if hasattr(self, "value_cache_list"):
+            self.value_cache_list = []
+
     @property
     def key_cache(self) -> List[torch.Tensor]:
         """Backwards compatibility accessor for key tensors."""
