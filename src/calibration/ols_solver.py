@@ -32,7 +32,7 @@ class PerHeadOLSSolver:
         head_dim: int,
         ridge_alpha: float = 1e-4,
         device: Union[str, torch.device] = "cpu",
-        dtype: torch.dtype = torch.float32,
+        dtype: torch.dtype = torch.float64,
     ):
         self.num_layers = num_layers
         self.num_kv_heads = num_kv_heads
@@ -135,7 +135,7 @@ class PerHeadOLSSolver:
         # Let's solve: (Sigma_KK_reg) @ W_OLS^T = Sigma_VK^T
         b = self.sigma_vk.transpose(-1, -2)
         w_t = torch.linalg.solve(sigma_kk_reg, b)
-        self.w_ols = w_t.transpose(-1, -2).contiguous()
+        self.w_ols = w_t.transpose(-1, -2).to(torch.float32).contiguous()
         return self.w_ols
 
     def predict_v(

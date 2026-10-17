@@ -55,9 +55,9 @@ def generate_calibration_prompt(tokenizer, target_len: int, seed: int) -> str:
 def main():
     parser = argparse.ArgumentParser(description="VECTOR Phase 5–6 Offline OLS Calibration")
     parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-1.5B-Instruct")
-    parser.add_argument("--num_samples", type=int, default=16, help="Number of training sequences")
-    parser.add_argument("--val_samples", type=int, default=4, help="Number of validation sequences")
-    parser.add_argument("--seq_len", type=int, default=1024, help="Token length per sequence")
+    parser.add_argument("--num_samples", type=int, default=500, help="Number of training sequences (500 x 2048 = 1M tokens)")
+    parser.add_argument("--val_samples", type=int, default=16, help="Number of validation sequences (16 x 2048 = 32K tokens)")
+    parser.add_argument("--seq_len", type=int, default=2048, help="Token length per sequence")
     parser.add_argument("--ridge_alpha", type=float, default=1e-4, help="L2 regularization parameter")
     parser.add_argument("--output_file", type=str, default="weights/w_ols_qwen2.5_1.5b.pt")
     parser.add_argument("--chart_file", type=str, default="results/calibration/r2_layer_chart.png")
