@@ -89,3 +89,7 @@ class FullKVCacheWrapper(DynamicCache):
             if v is not None:
                 total_bytes += v.numel() * v.element_size()
         return total_bytes
+
+
+# Alias for backward and notebook compatibility
+FullKVCache = FullKVCacheWrapper
