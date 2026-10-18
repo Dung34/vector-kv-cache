@@ -134,7 +134,8 @@ class PerHeadOLSSolver:
         # torch.linalg.solve solves A @ X = B
         # Let's solve: (Sigma_KK_reg) @ W_OLS^T = Sigma_VK^T
         b = self.sigma_vk.transpose(-1, -2)
-        w_t = torch.linalg.solve(sigma_kk_reg, b)
+        # Solve on CPU using robust LAPACK kernels to prevent CUDA driver/kernel image mismatch on Tesla T4
+        w_t = torch.linalg.solve(sigma_kk_reg.cpu(), b.cpu()).to(self.device)
         self.w_ols = w_t.transpose(-1, -2).to(torch.float32).contiguous()
         return self.w_ols
 
