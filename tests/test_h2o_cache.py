@@ -169,6 +169,48 @@ class TestH2OKVCache(unittest.TestCase):
         positions = k_out2[0, 0, :, 0]
         self.assertTrue(torch.all(positions[1:] > positions[:-1]), "KV cache must remain strictly sorted!")
 
+    def test_query_chunk_attention_injection_preserves_target_tokens(self):
+        """
+        Verifies that Query Chunk Attention Injection preserves target tokens in H2OKVCache.
+        """
+        batch_size = 1
+        num_heads = 2
+        head_dim = 16
+        cache = H2OKVCache(compression_ratio=0.75, num_sink_tokens=4, min_recent_tokens=8)
+
+        haystack_len = 90
+        query_len = 10
+        total_prefill = haystack_len + query_len
+
+        # Haystack
+        cache.is_prefilling = True
+        k_haystack = torch.randn(batch_size, num_heads, haystack_len, head_dim)
+        v_haystack = torch.randn(batch_size, num_heads, haystack_len, head_dim)
+        cache.update(k_haystack, v_haystack, layer_idx=0)
+
+        # Query chunk
+        k_query = torch.randn(batch_size, num_heads, query_len, head_dim)
+        v_query = torch.randn(batch_size, num_heads, query_len, head_dim)
+        cache.update(k_query, v_query, layer_idx=0)
+
+        # Register query attention
+        target_token_idx = 50
+        mock_query_attn = torch.zeros(batch_size, num_heads, query_len, total_prefill)
+        mock_query_attn[:, :, :, target_token_idx] = 10.0
+        cache.register_attention_scores(layer_idx=0, attn_scores=mock_query_attn)
+
+        # Trigger prune
+        cache.is_prefilling = False
+        k_dec = torch.randn(batch_size, num_heads, 1, head_dim)
+        v_dec = torch.randn(batch_size, num_heads, 1, head_dim)
+        cache.update(k_dec, v_dec, layer_idx=0)
+
+        stored_pos = cache._stored_positions[0]
+        self.assertIsNotNone(stored_pos)
+        stored_list = stored_pos[0, 0].cpu().tolist()
+        self.assertIn(target_token_idx, stored_list)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -311,6 +311,57 @@ class TestVectorKVCache(unittest.TestCase):
             else:
                 self.assertEqual(mem_bytes, initial_mem, f"Step {step}: Memory collapsed from {initial_mem} to {mem_bytes}")
 
+    def test_query_chunk_attention_injection_preserves_target_tokens(self):
+        """
+        Tests that Query Chunk Attention Injection successfully preserves target (needle)
+        tokens in _stored_positions after budget pruning.
+        """
+        cache = VectorKVCache(
+            compression_ratio=0.75,
+            approx_ratio=0.20,
+            num_sink_tokens=4,
+            recent_ratio=0.10,
+            w_ols=self.w_ols,
+        )
+
+        haystack_len = 90
+        query_len = 10
+        total_prefill = haystack_len + query_len  # 100 tokens
+
+        # Step 1: Haystack prefill (tokens 0..89)
+        cache.is_prefilling = True
+        k_haystack = torch.randn(self.batch_size, self.num_heads, haystack_len, self.head_dim)
+        v_haystack = torch.randn(self.batch_size, self.num_heads, haystack_len, self.head_dim)
+        cache.update(k_haystack, v_haystack, layer_idx=0)
+
+        # Step 2: Query chunk prefill (tokens 90..99)
+        k_query = torch.randn(self.batch_size, self.num_heads, query_len, self.head_dim)
+        v_query = torch.randn(self.batch_size, self.num_heads, query_len, self.head_dim)
+        cache.update(k_query, v_query, layer_idx=0)
+
+        # Step 3: Simulate attention hook registering high query attention on target token 50
+        target_token_idx = 50
+        mock_query_attn = torch.zeros(self.batch_size, self.num_heads, query_len, total_prefill)
+        mock_query_attn[:, :, :, target_token_idx] = 10.0  # Massive attention on target token
+        cache.register_attention_scores(layer_idx=0, attn_scores=mock_query_attn)
+
+        # Step 4: Complete prefill, trigger decode step with pruning
+        cache.is_prefilling = False
+        k_dec = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+        v_dec = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+        cache.update(k_dec, v_dec, layer_idx=0)
+
+        # Step 5: Verify target_token_idx is preserved in _stored_positions[0]
+        stored_pos = cache._stored_positions[0]
+        self.assertIsNotNone(stored_pos)
+        stored_list = stored_pos[0, 0].cpu().tolist()
+        self.assertIn(
+            target_token_idx,
+            stored_list,
+            f"Target token {target_token_idx} with high query attention was evicted! Stored: {stored_list}"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+
