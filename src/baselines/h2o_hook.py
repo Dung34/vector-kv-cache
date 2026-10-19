@@ -64,6 +64,23 @@ class H2OAttentionHookManager:
         except Exception:
             pass
 
+        # Pre-hook on model to bypass causal mask creation during single-token decode
+        def _model_decode_mask_pre_hook(module, args, kwargs):
+            input_ids = kwargs.get("input_ids", None)
+            if input_ids is None and len(args) > 0:
+                input_ids = args[0]
+            if input_ids is not None and hasattr(input_ids, "shape") and input_ids.shape[-1] == 1:
+                attn_mask = kwargs.get("attention_mask", None)
+                if attn_mask is None or not isinstance(attn_mask, dict):
+                    kwargs["attention_mask"] = {"full_attention": None}
+            return args, kwargs
+
+        try:
+            handle = self.model.register_forward_pre_hook(_model_decode_mask_pre_hook, with_kwargs=True)
+            self.hooks.append(handle)
+        except Exception:
+            pass
+
         # Find layers container (supports model.layers, model.model.layers, etc.)
         layers = None
         for path in ["model.layers", "layers", "transformer.h", "decoder.layers"]:
