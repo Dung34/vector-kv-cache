@@ -44,10 +44,12 @@ class H2OKVCache(DynamicCache):
         self.num_sink_tokens = num_sink_tokens
         self.max_budget = max_budget
         self.active_budget: Optional[int] = max_budget
+        self.is_prefilling: bool = False
 
         # Storage per layer
         self._key_cache: List[torch.Tensor] = []
         self._value_cache: List[torch.Tensor] = []
+        self._stored_positions: List[Optional[torch.Tensor]] = []
         # Accumulated attention scores: [batch_size, num_kv_heads, seq_len]
         self.accumulated_scores: List[torch.Tensor] = []
         # Cached index buffers to eliminate repetitive GPU memory allocation
@@ -76,7 +78,9 @@ class H2OKVCache(DynamicCache):
         self.accumulated_scores = []
         self._key_cache = []
         self._value_cache = []
+        self._stored_positions = []
         self.active_budget = self.max_budget
+        self.is_prefilling = False
         self._cached_sink_indices = None
         self._cached_recent_offsets = None
         if hasattr(self, "layers"):
@@ -139,6 +143,8 @@ class H2OKVCache(DynamicCache):
             v_full = value_states
             self._key_cache.append(k_full)
             self._value_cache.append(v_full)
+            pos_init = torch.arange(incoming_len, device=key_states.device).view(1, 1, -1).expand(batch_size, num_heads, -1)
+            self._stored_positions.append(pos_init)
             if len(self.accumulated_scores) <= layer_idx:
                 while len(self.accumulated_scores) < layer_idx:
                     self.accumulated_scores.append(None)
@@ -155,6 +161,13 @@ class H2OKVCache(DynamicCache):
 
             self._key_cache[layer_idx] = k_full
             self._value_cache[layer_idx] = v_full
+
+            prev_pos = self._stored_positions[layer_idx]
+            if prev_pos is not None:
+                pos_incoming = prev_pos[..., -1:] + torch.arange(1, incoming_len + 1, device=key_states.device).view(1, 1, -1)
+                self._stored_positions[layer_idx] = torch.cat([prev_pos, pos_incoming], dim=-1)
+            else:
+                self._stored_positions[layer_idx] = torch.arange(k_full.shape[-2], device=key_states.device).view(1, 1, -1).expand(batch_size, num_heads, -1)
 
             # Pad accumulated_scores for new tokens if needed
             curr_scores = self.accumulated_scores[layer_idx]
@@ -180,8 +193,8 @@ class H2OKVCache(DynamicCache):
 
         target_budget = self.active_budget
 
-        # During prefill (incoming_len > 1), preserve all tokens to match the model's causal attention mask
-        if incoming_len > 1 or total_len <= target_budget:
+        # During prefill (incoming_len > 1 or is_prefilling) or before exceeding budget: Keep everything in Retain
+        if incoming_len > 1 or getattr(self, "is_prefilling", False) or total_len <= target_budget:
             self._key_cache[layer_idx] = k_full
             self._value_cache[layer_idx] = v_full
             self._sync_dynamic_layers(layer_idx, k_full, v_full)
@@ -246,6 +259,8 @@ class H2OKVCache(DynamicCache):
 
         self._key_cache[layer_idx] = k_pruned
         self._value_cache[layer_idx] = v_pruned
+        if len(self._stored_positions) > layer_idx and self._stored_positions[layer_idx] is not None:
+            self._stored_positions[layer_idx] = torch.gather(self._stored_positions[layer_idx], -1, selected_indices)
         self.accumulated_scores[layer_idx] = torch.gather(
             self.accumulated_scores[layer_idx], -1, selected_indices
         )

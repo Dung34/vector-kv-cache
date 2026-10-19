@@ -52,6 +52,7 @@ class VectorKVCache(DynamicCache):
         self.num_sink_tokens = num_sink_tokens
         self.max_budget = max_budget
         self.active_budget = max_budget
+        self.is_prefilling: bool = False
         self.rope_theta = rope_theta
         self.rotary_emb = rotary_emb
 
@@ -118,6 +119,7 @@ class VectorKVCache(DynamicCache):
         self._cached_eps = []
         self.is_pruned = []
         self.active_budget = self.max_budget
+        self.is_prefilling = False
         if hasattr(self, "layers"):
             self.layers = []
 
@@ -284,8 +286,8 @@ class VectorKVCache(DynamicCache):
 
         target_budget = self.active_budget
 
-        # During prefill (incoming_len > 1) or before exceeding budget: Keep everything in Retain
-        if incoming_len > 1 or total_len <= target_budget:
+        # During prefill (incoming_len > 1 or is_prefilling) or before exceeding budget: Keep everything in Retain
+        if incoming_len > 1 or getattr(self, "is_prefilling", False) or total_len <= target_budget:
             if self.is_pruned[layer_idx]:
                 v_full_prev = self._reconstruct_full_v(layer_idx, prev_k, device, dtype)
             else:
