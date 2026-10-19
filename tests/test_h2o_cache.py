@@ -83,6 +83,49 @@ class TestH2OKVCache(unittest.TestCase):
         self.assertEqual(processed.shape, (batch_size, 2, query_len, seq_len))
         self.assertTrue(torch.allclose(processed, torch.ones(batch_size, 2, query_len, seq_len)))
 
+    def test_attention_sinks_retention(self):
+        """
+        Verifies that initial tokens (num_sink_tokens) are never evicted,
+        even if their attention scores are zero.
+        """
+        batch_size = 1
+        num_heads = 2
+        seq_len = 100
+        head_dim = 32
+        num_sinks = 4
+
+        cache = H2OKVCache(
+            compression_ratio=0.75,
+            recent_ratio=0.10,
+            min_recent_tokens=8,
+            num_sink_tokens=num_sinks,
+        )
+
+        k_mock = torch.randn(batch_size, num_heads, seq_len, head_dim)
+        v_mock = torch.randn(batch_size, num_heads, seq_len, head_dim)
+        # Mark sink tokens with a specific identifier value
+        k_mock[:, :, :num_sinks, :] = 999.0
+
+        # Scores: zero on sink tokens, high on middle tokens
+        scores = torch.zeros(batch_size, num_heads, seq_len)
+        scores[:, :, 10:20] = 50.0
+        cache.register_attention_scores(0, scores)
+
+        # Prefill
+        cache.update(k_mock, v_mock, layer_idx=0)
+
+        # Trigger prune with 1 decode token
+        k_step = torch.randn(batch_size, num_heads, 1, head_dim)
+        v_step = torch.randn(batch_size, num_heads, 1, head_dim)
+        k_out, _ = cache.update(k_step, v_step, layer_idx=0)
+
+        # First num_sinks tokens in k_out must match the marked sink tokens
+        sink_keys = k_out[:, :, :num_sinks, :]
+        self.assertTrue(
+            torch.allclose(sink_keys, torch.tensor(999.0, device=sink_keys.device)),
+            "Initial sink tokens must be permanently retained regardless of scores!"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

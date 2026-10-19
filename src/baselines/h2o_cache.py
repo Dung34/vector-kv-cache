@@ -28,6 +28,7 @@ class H2OKVCache(DynamicCache):
         compression_ratio: float = 0.75,     # p_c in [0.0, 1.0)
         recent_ratio: float = 0.10,          # percentage of budget reserved for recent tokens
         min_recent_tokens: int = 32,         # minimum number of recent tokens to keep
+        num_sink_tokens: int = 4,            # attention sink (initial tokens) to keep permanently
         max_budget: Optional[int] = None,    # optional hard cap on number of tokens
     ):
         try:
@@ -40,6 +41,7 @@ class H2OKVCache(DynamicCache):
         self.budget_ratio = 1.0 - compression_ratio
         self.recent_ratio = recent_ratio
         self.min_recent_tokens = min_recent_tokens
+        self.num_sink_tokens = num_sink_tokens
         self.max_budget = max_budget
         self.active_budget: Optional[int] = max_budget
 
@@ -180,34 +182,47 @@ class H2OKVCache(DynamicCache):
             self._sync_dynamic_layers(layer_idx, k_full, v_full)
             return k_full, v_full
 
-        # Step 3: Split budget into Recent and Heavy Hitters (H2)
-        k_recent = max(int(target_budget * self.recent_ratio), min(self.min_recent_tokens, target_budget // 2))
-        k_h2 = target_budget - k_recent
+        # Step 3: Split budget into Sinks, Recent, and Heavy Hitters (H2)
+        k_sink = min(self.num_sink_tokens, max(0, target_budget // 4))
+        k_recent = max(int(target_budget * self.recent_ratio), min(self.min_recent_tokens, (target_budget - k_sink) // 2))
+        k_recent = min(k_recent, total_len - k_sink)
+        if k_sink + k_recent > target_budget:
+            k_recent = max(1, target_budget - k_sink)
+        k_h2 = target_budget - k_sink - k_recent
 
-        # Step 4: Identify candidate past tokens and recent tokens
-        candidate_len = total_len - k_recent
-        if candidate_len <= k_h2:
+        # Step 4: Identify candidate middle tokens (between sink and recent)
+        cand_start = k_sink
+        cand_end = total_len - k_recent
+        cand_len = max(0, cand_end - cand_start)
+
+        if cand_len <= k_h2:
             self._key_cache[layer_idx] = k_full
             self._value_cache[layer_idx] = v_full
             self._sync_dynamic_layers(layer_idx, k_full, v_full)
             return k_full, v_full
 
-        # Retrieve scores for past candidates
-        scores = self.accumulated_scores[layer_idx][..., :candidate_len]
-
-        # Top-k Heavy Hitters selection across candidate tokens
-        _, h2_indices = torch.topk(scores, k=k_h2, dim=-1, largest=True, sorted=False)
+        # Sinks indices
+        sink_indices = torch.arange(
+            0, k_sink, device=key_states.device, dtype=torch.long
+        ).view(1, 1, k_sink).expand(batch_size, num_heads, -1)
 
         # Recent indices for each batch & head
         recent_indices = torch.arange(
-            candidate_len,
+            cand_end,
             total_len,
             device=key_states.device,
             dtype=torch.long
         ).view(1, 1, k_recent).expand(batch_size, num_heads, -1)
 
-        # Concatenate H2 indices and recent indices
-        selected_indices = torch.cat([h2_indices, recent_indices], dim=-1)
+        # Top-k Heavy Hitters selection across candidate middle tokens
+        if k_h2 > 0:
+            scores = self.accumulated_scores[layer_idx][..., cand_start:cand_end]
+            _, h2_sub_indices = torch.topk(scores, k=k_h2, dim=-1, largest=True, sorted=False)
+            h2_indices = cand_start + h2_sub_indices
+            selected_indices = torch.cat([sink_indices, h2_indices, recent_indices], dim=-1)
+        else:
+            selected_indices = torch.cat([sink_indices, recent_indices], dim=-1)
+
         selected_indices, _ = torch.sort(selected_indices, dim=-1)
 
         # Step 5: Gather K and V using selected indices
