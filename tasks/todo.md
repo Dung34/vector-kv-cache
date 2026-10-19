@@ -23,6 +23,10 @@
   - Body: Create `kaggle_phase7_8_vector_cache_v2.ipynb` integrating decoupled prefill/decode benchmark, Qwen2.5 Chat Template, and Multi-Needle NIAH (3 & 5 needles @ 4096 tokens).
   - Acceptance Criteria: Notebook runs end-to-end, evaluates Full vs H2O vs VECTOR, and generates automated academic report v2.0.
   - Verification: Run validation test on notebook code with mock forward passes.
+- [x] Task 2.1.1: Upgrade Benchmark, Evaluation & Reporting to v3.0 <!-- id: 2.1.1 -->
+  - Body: Implement Query-Prompt Attention Injection (0 OOM + realistic query attention score capture), multi-depth NIAH (25%, 50%, 75%), cache retention tracking, and v3.0 comprehensive report.
+  - Acceptance Criteria: `notebooks/kaggle_phase7_8_vector_cache_v2.ipynb` and `notebooks/kaggle_phase7_8_vector_cache.ipynb` generated, unit tests passing.
+  - Verification: `python scratch/generate_vector_notebook_v2.py` and `python -m unittest discover tests` pass.
 - [ ] Task 2.2: Verify Budget Swap Invariance and Single-Needle Recovery <!-- id: 2.2 -->
   - Body: Verify VECTOR recovers needle accuracy at 50% depth (overcoming H2O's 0% blind spot) at p_c=75%.
   - Acceptance Criteria: VECTOR single-needle accuracy >= 90%.
