@@ -58,6 +58,11 @@ class VectorAttentionHookManager:
     def register_hooks(self):
         """Register forward hooks onto all self_attn modules of the model."""
         self.remove_hooks()
+        try:
+            from src.utils.mask_patch import patch_hf_eager_attention_for_pruned_cache
+            patch_hf_eager_attention_for_pruned_cache()
+        except Exception:
+            pass
 
         # Find layers container (supports model.layers, model.model.layers, etc.)
         layers = None
