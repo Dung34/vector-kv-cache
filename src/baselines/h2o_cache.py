@@ -73,6 +73,12 @@ class H2OKVCache(DynamicCache):
             return 0
         return self._key_cache[layer_idx].shape[-2]
 
+    def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int = 0) -> Tuple[int, int]:
+        """Return (kv_length, kv_offset) for causal attention mask generation."""
+        query_length = cache_position.shape[0] if cache_position is not None else 0
+        past_seen_tokens = self.get_seq_length(layer_idx)
+        return (past_seen_tokens + query_length, 0)
+
     def reset_scores(self):
         """Reset accumulated scores and storage for a new sequence generation."""
         self.accumulated_scores = []
