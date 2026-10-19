@@ -43,12 +43,18 @@ Mục tiêu của kế hoạch này là rà soát toàn diện từ đặc tả 
   - Cập nhật notebook `kaggle_baseline_full_h2o_v2.ipynb` và các báo cáo tự động.
   - Kiểm chứng: Số liệu khoa học minh bạch, tách bạch chi phí Prefill khỏi Decode.
 
-### Giai đoạn 2: Tái Đánh Giá Thực Nghiệm Cốt Lõi (Core Verification)
-- [ ] **Task 2.1: Chạy lại Single-Needle NIAH trên H2O và VECTOR**
-  - Chạy lại bài test cây kim ở độ dài 2048, 4096 tokens với các mức nén $50\%, 75\%$.
-  - Xác nhận VECTOR lấy lại cây kim thành công (Pass rate $\ge 90\%$) và vượt trội H2O ở các độ sâu giữa.
-- [ ] **Task 2.2: Tối ưu Hóa Attention Capture (Giảm Peak Memory Prefill)**
-  - Thay vì `output_attentions=True` toàn chuỗi gây ngốn hàng GB VRAM, thiết kế cơ chế hook chỉ lưu slice attention cuối hoặc giảm thiểu allocation.
+### Giai đoạn 2: Tái Đánh Giá Thực Nghiệm Cốt Lõi (VECTOR vs Baselines)
+- [x] **Task 2.1: Chuẩn Hóa và Nâng Cấp Notebook VECTOR Kaggle lên Phiên Bản v2.0**
+  - Xây dựng `kaggle_phase7_8_vector_cache_v2.ipynb` tích hợp đầy đủ 3 bài kiểm thử:
+    1. Đo đạc tài nguyên tách biệt Prefill (ms) & Decode (tok/s) @ 4096 tokens.
+    2. Single-Needle NIAH @ 4096 tokens với Chat Template chuẩn hóa (vùng giữa 50% độ sâu).
+    3. Multi-Needle NIAH (3 & 5 needles @ 4096 tokens) đối chứng trực tiếp với H2O và Full FP16.
+  - Tự động hóa xuất báo cáo Markdown v2.0 với đầy đủ bảng biểu học thuật.
+- [ ] **Task 2.2: Tái Đánh Giá Thực Nghiệm trên Kaggle GPU T4**
+  - Thực thi đối chuẩn 3 bên Full-FP16 vs H2O vs VECTOR tại các tỷ lệ nén $50\%, 75\%$.
+  - Xác nhận VECTOR phục hồi Recall đa kim từ $0.0\%$ (H2O) lên $\ge 80\text{--}100\%$ nhờ cơ chế Budget Swap.
+- [ ] **Task 2.3: Tối ưu Hóa Attention Capture Hook (Giảm Peak Memory Prefill)**
+  - Thiết kế cơ chế hook streaming / sliding hoặc hạn chế ma trận 4D attention trong prefill để giảm thiểu Peak VRAM.
 
 ### Giai đoạn 3: Hoàn Thiện Thực Nghiệm Mở Rộng & Đóng Gói (Evaluation & Deliverables)
 - [ ] **Task 3.1: Benchmark Multi-Needle NIAH & Memory Footprint**

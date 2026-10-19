@@ -18,15 +18,19 @@
 - [x] Attention distribution verified stable
 - [x] Throughput benchmark exceeds 20 tokens/sec
 
-## Phase 2: Core Empirical Verification
-- [ ] Task 3: Re-evaluate Single-Needle NIAH Preview on T4 GPU <!-- id: 3 -->
-  - Body: Test needle retrieval at 50% depth on 2048/4096 tokens with p_c=75%.
-  - Acceptance Criteria: Model successfully retrieves target needle, resolving previous preview failure.
-  - Verification: Script `scripts/run_niah_benchmark.py` outputs PASS for needle key.
-- [ ] Task 4: Address `output_attentions=True` Memory Overhead <!-- id: 4 -->
-  - Body: Prevent massive attention matrix allocation during long-context prefill.
-  - Acceptance Criteria: MemoryTracker confirms no multi-GB spike during prefill at 8K tokens.
-  - Verification: Memory benchmark on 4K/8K tokens runs without OOM.
+## Phase 2: Core Empirical Verification (VECTOR vs Baselines)
+- [x] Task 2.1: Upgrade and Standardize VECTOR Kaggle Notebook to v2.0 <!-- id: 2.1 -->
+  - Body: Create `kaggle_phase7_8_vector_cache_v2.ipynb` integrating decoupled prefill/decode benchmark, Qwen2.5 Chat Template, and Multi-Needle NIAH (3 & 5 needles @ 4096 tokens).
+  - Acceptance Criteria: Notebook runs end-to-end, evaluates Full vs H2O vs VECTOR, and generates automated academic report v2.0.
+  - Verification: Run validation test on notebook code with mock forward passes.
+- [ ] Task 2.2: Verify Budget Swap Invariance and Single-Needle Recovery <!-- id: 2.2 -->
+  - Body: Verify VECTOR recovers needle accuracy at 50% depth (overcoming H2O's 0% blind spot) at p_c=75%.
+  - Acceptance Criteria: VECTOR single-needle accuracy >= 90%.
+  - Verification: Verification run passes and outputs passkey correctly.
+- [ ] Task 2.3: Multi-Needle Recall Evaluation (3 & 5 Needles) <!-- id: 2.3 -->
+  - Body: Benchmark multi-needle retrieval across Full FP16, H2O (50%, 75%), and VECTOR (75%).
+  - Acceptance Criteria: VECTOR outperforms H2O 75% (which scored 0.0%) by >= 80% recall.
+  - Verification: Output table records multi-needle recall metrics.
 
 ## Checkpoint: Empirical Success
 - [ ] NIAH Single-Needle passes with high accuracy
