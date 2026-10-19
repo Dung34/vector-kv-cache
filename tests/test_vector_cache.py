@@ -194,6 +194,79 @@ class TestVectorKVCache(unittest.TestCase):
         # GQA grouped: [1, 2, 32]
         self.assertEqual(cache.accumulated_scores[0].shape, (1, 2, 32))
 
+    def test_attention_sinks_retention_vector(self):
+        """
+        Verifies that initial tokens (num_sink_tokens) are always kept in the Retain pool
+        with exact physical values in VectorKVCache.
+        """
+        num_sinks = 4
+        cache = VectorKVCache(
+            compression_ratio=0.75,
+            approx_ratio=0.15,
+            recent_ratio=0.10,
+            min_recent_tokens=8,
+            num_sink_tokens=num_sinks,
+            w_ols=self.w_ols,
+        )
+
+        total_tokens = 120
+        k_init = torch.randn(self.batch_size, self.num_heads, total_tokens - 1, self.head_dim)
+        v_init = torch.randn(self.batch_size, self.num_heads, total_tokens - 1, self.head_dim)
+        # Mark sink tokens
+        k_init[:, :, :num_sinks, :] = 888.0
+        v_init[:, :, :num_sinks, :] = 777.0
+
+        cache.update(k_init, v_init, layer_idx=0)
+
+        # Trigger prune with 1 decode token
+        k_step = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+        v_step = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+        k_out, v_out = cache.update(k_step, v_step, layer_idx=0)
+
+        # Check that stored positions include positions 0..num_sinks-1
+        stored_pos = cache._stored_positions[0]
+        for sink_idx in range(num_sinks):
+            self.assertTrue(
+                (stored_pos == sink_idx).any().item(),
+                f"Sink position {sink_idx} must be retained in stored_positions!"
+            )
+
+        # Sink keys and values in output must equal the marked values
+        sink_keys = k_out[:, :, :num_sinks, :]
+        sink_vals = v_out[:, :, :num_sinks, :]
+        self.assertTrue(torch.allclose(sink_keys, torch.tensor(888.0)))
+        self.assertTrue(torch.allclose(sink_vals, torch.tensor(777.0)))
+
+    def test_cached_eps_tracking(self):
+        """
+        Verifies that _cached_eps is correctly initialized during prefill and
+        incremented during decode steps.
+        """
+        cache = VectorKVCache(
+            compression_ratio=0.50,
+            approx_ratio=0.20,
+            recent_ratio=0.10,
+            min_recent_tokens=4,
+            w_ols=self.w_ols,
+        )
+
+        prefill_len = 20
+        k = torch.randn(self.batch_size, self.num_heads, prefill_len, self.head_dim)
+        v = torch.randn(self.batch_size, self.num_heads, prefill_len, self.head_dim)
+        cache.update(k, v, layer_idx=0)
+
+        self.assertIsNotNone(cache._cached_eps[0])
+        self.assertEqual(cache._cached_eps[0].shape[-1], prefill_len)
+
+        # 3 decode steps
+        for step in range(3):
+            k_tok = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+            v_tok = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+            cache.update(k_tok, v_tok, layer_idx=0)
+            # After pruning, cached eps must match the number of stored keys
+            n_k = cache._key_cache[0].shape[-2]
+            self.assertEqual(cache._cached_eps[0].shape[-1], n_k)
+
 
 if __name__ == "__main__":
     unittest.main()

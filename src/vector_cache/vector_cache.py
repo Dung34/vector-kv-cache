@@ -2,22 +2,14 @@
 VECTOR (Vector-based Asymmetric KV Cache Compression) Implementation.
 Reference: Lin et al., "A Simple Plug-in for Improving Eviction-Based KV Cache Compression", 2024.
 
-Implements asymmetric KV cache compression:
-  1. Budget Swap / Budget Relaxation: With the same memory budget as H2O,
-     retains more Keys: N_K = (1 - p_c + p_a) * L.
-  2. 3-Tier Partitioning:
-     - Retain (R): Keeps real K and real V for tokens with high reconstruction error eps_i
-       and recent window tokens (k_recent).
-     - Approximate (A): Keeps real K, discards physical V, reconstructs V_hat = W_OLS * (R_m^-1 * K)
-       on-the-fly during attention forward pass.
-     - Evict (E): Discards both K and V.
-  3. Strict physical memory invariance:
-     Memory_VECTOR == Memory_H2O == 2 * (1 - p_c) * L * D elements.
+Refactored Architecture:
+  1. VectorBudgetPartitioner: Handles 3-tier partitioning & Budget Swap invariance.
+  2. VectorValueReconstructor: Handles RoPE decoupling & W_OLS value prediction.
+  3. VectorKVCache: Coordinates Hugging Face DynamicCache lifecycle & inference runtime.
 """
 
 from typing import Optional, Tuple, Any, Dict, List, Union
 import torch
-import torch.nn as nn
 
 try:
     from transformers.cache_utils import DynamicCache
@@ -26,7 +18,8 @@ except ImportError:
         def __init__(self):
             pass
 
-from ..calibration.rope_decoupler import decouple_rope
+from .reconstructor import VectorValueReconstructor
+from .partitioner import VectorBudgetPartitioner, PartitionResult
 
 
 class VectorKVCache(DynamicCache):
@@ -41,6 +34,7 @@ class VectorKVCache(DynamicCache):
         approx_ratio: float = 0.20,          # p_a in [0.0, 1.0 - p_c)
         recent_ratio: float = 0.10,          # percentage of budget reserved for recent tokens
         min_recent_tokens: int = 32,         # minimum number of recent tokens to keep
+        num_sink_tokens: int = 4,            # attention sink (initial tokens) to keep permanently in Retain
         max_budget: Optional[int] = None,    # optional hard cap on number of tokens
         w_ols: Optional[Union[torch.Tensor, str, Dict[str, Any]]] = None,
         rope_theta: float = 1000000.0,       # default RoPE base frequency (Qwen2.5: 1M, Llama3: 500k)
@@ -51,41 +45,36 @@ class VectorKVCache(DynamicCache):
         except TypeError:
             pass
 
-        assert 0.0 <= compression_ratio < 1.0, "compression_ratio (p_c) must be in [0.0, 1.0)"
-        assert 0.0 <= approx_ratio < (1.0 - compression_ratio), (
-            f"approx_ratio (p_a={approx_ratio}) must be < (1 - p_c={1.0 - compression_ratio})"
-        )
-
         self.compression_ratio = compression_ratio
         self.approx_ratio = approx_ratio
         self.recent_ratio = recent_ratio
         self.min_recent_tokens = min_recent_tokens
+        self.num_sink_tokens = num_sink_tokens
         self.max_budget = max_budget
         self.rope_theta = rope_theta
         self.rotary_emb = rotary_emb
 
-        # Load W_OLS if provided
-        self.w_ols: Optional[torch.Tensor] = None
-        if w_ols is not None:
-            self.set_w_ols(w_ols)
+        # Modular Subsystems
+        self.partitioner = VectorBudgetPartitioner(
+            compression_ratio=compression_ratio,
+            approx_ratio=approx_ratio,
+            recent_ratio=recent_ratio,
+            min_recent_tokens=min_recent_tokens,
+            num_sink_tokens=num_sink_tokens,
+        )
+        self.reconstructor = VectorValueReconstructor(
+            w_ols=w_ols,
+            rope_theta=rope_theta,
+        )
 
         # Storage per layer
-        # _key_cache stores physical K tensors: shape [batch, num_heads, N_K, head_dim]
         self._key_cache: List[Optional[torch.Tensor]] = []
-        # _value_cache stores physical V_retain tensors: shape [batch, num_heads, N_R, head_dim]
         self._value_cache: List[Optional[torch.Tensor]] = []
-        # Partition indices for each layer:
-        # retain_indices: relative indices in 0..N_K-1 that belong to Retain pool [batch, num_heads, N_R]
         self._retain_indices: List[Optional[torch.Tensor]] = []
-        # approx_indices: relative indices in 0..N_K-1 that belong to Approximate pool [batch, num_heads, N_A]
         self._approx_indices: List[Optional[torch.Tensor]] = []
-        # Original sequence positions of stored keys: [batch, num_heads, N_K]
         self._stored_positions: List[Optional[torch.Tensor]] = []
-
-        # Accumulated attention scores: [batch, num_heads, seq_len]
+        self._cached_eps: List[Optional[torch.Tensor]] = []
         self.accumulated_scores: List[Optional[torch.Tensor]] = []
-
-        # Tracking state
         self.is_pruned: List[bool] = []
 
     @property
@@ -100,22 +89,17 @@ class VectorKVCache(DynamicCache):
     def value_cache(self) -> List[torch.Tensor]:
         return self._value_cache
 
+    @property
+    def w_ols(self) -> Optional[torch.Tensor]:
+        return self.reconstructor.w_ols
+
+    @w_ols.setter
+    def w_ols(self, value: Optional[torch.Tensor]):
+        self.reconstructor.w_ols = value
+
     def set_w_ols(self, w_ols: Union[torch.Tensor, str, Dict[str, Any]]):
-        """Loads and formats the W_OLS weights tensor."""
-        if isinstance(w_ols, str):
-            loaded = torch.load(w_ols, map_location="cpu")
-            if isinstance(loaded, dict) and "w_ols" in loaded:
-                self.w_ols = loaded["w_ols"]
-            elif isinstance(loaded, torch.Tensor):
-                self.w_ols = loaded
-            else:
-                raise ValueError(f"Unrecognized format in weights file: {w_ols}")
-        elif isinstance(w_ols, dict) and "w_ols" in w_ols:
-            self.w_ols = w_ols["w_ols"]
-        elif isinstance(w_ols, torch.Tensor):
-            self.w_ols = w_ols
-        else:
-            raise TypeError(f"w_ols must be torch.Tensor, str path, or dict, got {type(w_ols)}")
+        """Loads and formats the W_OLS weights tensor via Reconstructor."""
+        self.reconstructor.set_w_ols(w_ols)
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         if not self._key_cache or layer_idx >= len(self._key_cache) or self._key_cache[layer_idx] is None:
@@ -130,17 +114,15 @@ class VectorKVCache(DynamicCache):
         self._retain_indices = []
         self._approx_indices = []
         self._stored_positions = []
+        self._cached_eps = []
         self.is_pruned = []
         if hasattr(self, "layers"):
             self.layers = []
 
     def register_attention_scores(self, layer_idx: int, attn_scores: torch.Tensor):
-        """
-        Called by forward hook to accumulate attention weights into scores.
-        attn_scores: [batch_size, num_kv_heads, query_len, seq_len] or [batch_size, num_kv_heads, seq_len]
-        """
+        """Called by forward hook to accumulate attention weights into scores."""
         if attn_scores.dim() == 4:
-            step_scores = attn_scores.sum(dim=-2)  # [batch_size, num_kv_heads, seq_len]
+            step_scores = attn_scores.sum(dim=-2)
         else:
             step_scores = attn_scores
 
@@ -162,86 +144,6 @@ class VectorKVCache(DynamicCache):
 
         self.accumulated_scores[layer_idx] = curr_scores + step_scores
 
-    def _compute_rope_cos_sin(
-        self,
-        positions: torch.Tensor,
-        head_dim: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Generates standard RoPE (cos, sin) tensors for given position indices.
-        positions: [batch_size, seq_len] or [batch_size, num_heads, seq_len]
-        Returns: cos, sin of shape matching positions with head_dim
-        """
-        if positions.dim() == 3:
-            # Flatten to 2D for computation then reshape back
-            b, h, s = positions.shape
-            pos_flat = positions.view(b * h, s)
-        else:
-            pos_flat = positions
-            b, h, s = positions.shape[0], 1, positions.shape[1]
-
-        inv_freq = 1.0 / (self.rope_theta ** (torch.arange(0, head_dim, 2, device=device, dtype=torch.float32) / head_dim))
-        freqs = torch.einsum("bs, d -> bsd", pos_flat.float(), inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos().to(dtype).view(b, h, s, head_dim)
-        sin = emb.sin().to(dtype).view(b, h, s, head_dim)
-        return cos, sin
-
-    def _predict_v(
-        self,
-        layer_idx: int,
-        k_rot: torch.Tensor,
-        positions: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Reconstructs Value vectors from RoPE-rotated Key vectors:
-          1. Decouples RoPE: K_decoupled = R_m^-1 * K_rot
-          2. Applies W_OLS linear mapping: V_hat = K_decoupled * W_OLS^T
-        """
-        batch_size, num_heads, seq_len, head_dim = k_rot.shape
-        device = k_rot.device
-        dtype = k_rot.dtype
-
-        # 1. RoPE Decoupling
-        cos, sin = self._compute_rope_cos_sin(positions, head_dim, device, dtype)
-        # Cos/Sin have shape [batch, num_heads, seq_len, head_dim]
-        # Decouple RoPE
-        k_decoupled = decouple_rope(k_rot, cos, sin, unsqueeze_dim=1)
-
-        # 2. OLS mapping
-        if self.w_ols is not None:
-            w_layer = self.w_ols[layer_idx].to(device=device, dtype=dtype)
-            # w_layer shape: [num_heads, head_dim, head_dim]
-            # k_decoupled: [batch, num_heads, seq_len, head_dim]
-            # V_hat = k_decoupled @ W^T
-            v_hat = torch.einsum("bhsd, hod -> bhso", k_decoupled, w_layer)
-        else:
-            # Fallback if W_OLS is not loaded: return k_decoupled as heuristic
-            v_hat = k_decoupled
-
-        return v_hat
-
-    def _compute_reconstruction_error(
-        self,
-        layer_idx: int,
-        k_rot: torch.Tensor,
-        v_real: torch.Tensor,
-        positions: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Computes the relative L2 reconstruction error eps_i for candidate tokens:
-          eps_i = || v_real_i - v_hat_i ||_2 / (|| v_real_i ||_2 + 1e-6)
-        Returns: eps of shape [batch_size, num_heads, candidate_len]
-        """
-        v_hat = self._predict_v(layer_idx, k_rot, positions)
-        diff = v_real - v_hat
-        diff_norm = torch.norm(diff, p=2, dim=-1)
-        v_norm = torch.norm(v_real, p=2, dim=-1)
-        eps = diff_norm / (v_norm + 1e-6)
-        return eps
-
     def _ensure_layer_capacity(self, layer_idx: int):
         while len(self._key_cache) <= layer_idx:
             self._key_cache.append(None)
@@ -249,8 +151,30 @@ class VectorKVCache(DynamicCache):
             self._retain_indices.append(None)
             self._approx_indices.append(None)
             self._stored_positions.append(None)
+            self._cached_eps.append(None)
             self.is_pruned.append(False)
             self.accumulated_scores.append(None)
+
+    # --- Delegations to Reconstructor (Preserves Public & Protected API) ---
+    def _compute_rope_cos_sin(self, positions: torch.Tensor, head_dim: int, device: torch.device, dtype: torch.dtype):
+        return self.reconstructor.compute_rope_cos_sin(positions, head_dim, device, dtype)
+
+    def _predict_v(self, layer_idx: int, k_rot: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        return self.reconstructor.predict_v(layer_idx, k_rot, positions)
+
+    def _compute_reconstruction_error(self, layer_idx: int, k_rot: torch.Tensor, v_real: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        return self.reconstructor.compute_reconstruction_error(layer_idx, k_rot, v_real, positions)
+
+    def _reconstruct_full_v(self, layer_idx: int, k_stored: torch.Tensor, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        return self.reconstructor.reconstruct_full_v(
+            layer_idx=layer_idx,
+            k_stored=k_stored,
+            v_retain=self._value_cache[layer_idx],
+            retain_rel=self._retain_indices[layer_idx],
+            approx_rel=self._approx_indices[layer_idx],
+            stored_pos=self._stored_positions[layer_idx],
+            dtype=dtype,
+        )
 
     def _partition_and_prune(
         self,
@@ -260,183 +184,35 @@ class VectorKVCache(DynamicCache):
         pos_full: torch.Tensor,
         target_budget: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Executes the 3-tier partitioning algorithm:
-          1. Candidate pool selection (Budget Relaxation): top N_K tokens.
-          2. Error calculation: eps_i = || V - W_OLS * K ||.
-          3. Partitioning:
-             - Retain (R): recent tokens + candidate tokens with highest eps_i (total N_R).
-             - Approximate (A): candidate tokens with lowest eps_i (total N_A).
-             - Evict (E): remaining tokens.
-        """
-        batch_size, num_heads, total_len, head_dim = k_full.shape
-        device = k_full.device
-
-        # Step 1: Compute budgets with mathematical invariance
-        # Target H2O budget in token pairs is target_budget
-        # VECTOR Key budget: N_K = min(total_len, target_budget + int(self.approx_ratio * total_len))
-        # Recent tokens count:
-        k_recent = max(int(target_budget * self.recent_ratio), min(self.min_recent_tokens, target_budget // 2))
-        k_recent = min(k_recent, total_len)
-
-        # Value retain budget: N_R
-        # N_R = max(k_recent, target_budget - int(self.approx_ratio * total_len))
-        n_r = max(k_recent, target_budget - int(self.approx_ratio * total_len))
-        # Total keys budget: N_K = 2 * target_budget - N_R (guarantees N_K + N_R == 2 * target_budget)
-        n_k = min(total_len, 2 * target_budget - n_r)
-        # Readjust n_r if n_k hit total_len boundary
-        if n_k + n_r > 2 * target_budget:
-            n_r = max(k_recent, 2 * target_budget - n_k)
-
-        n_a = n_k - n_r
-
-        # Step 2: Candidate pool selection via Accumulated Attention Scores
-        # Candidate past pool length (excluding recent window)
-        cand_past_len = total_len - k_recent
-        k_h2_needed = n_k - k_recent
-
-        scores = self.accumulated_scores[layer_idx]
-        if scores is None or scores.shape[-1] < cand_past_len:
-            # If no scores available yet, default to most recent tokens
-            h2_indices = torch.arange(
-                max(0, cand_past_len - k_h2_needed),
-                cand_past_len,
-                device=device,
-                dtype=torch.long
-            ).view(1, 1, -1).expand(batch_size, num_heads, -1)
-        else:
-            past_scores = scores[..., :cand_past_len]
-            _, h2_indices = torch.topk(past_scores, k=k_h2_needed, dim=-1, largest=True, sorted=False)
-
-        # Recent indices: [batch, num_heads, k_recent]
-        recent_indices = torch.arange(
-            cand_past_len,
-            total_len,
-            device=device,
-            dtype=torch.long
-        ).view(1, 1, k_recent).expand(batch_size, num_heads, -1)
-
-        # Candidate indices pool of size N_K: [batch, num_heads, N_K]
-        cand_indices = torch.cat([h2_indices, recent_indices], dim=-1)
-        cand_indices, _ = torch.sort(cand_indices, dim=-1)
-
-        # Gather candidate tensors
-        gather_k_idx = cand_indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-        k_cand = torch.gather(k_full, -2, gather_k_idx)
-        v_cand = torch.gather(v_full, -2, gather_k_idx)
-        pos_cand = torch.gather(pos_full, -1, cand_indices)
-
-        # Step 3: Compute reconstruction error eps_i on past candidate tokens (h2_indices only)
-        # Recent tokens are forced into Retain, so we partition the remaining (N_K - k_recent) tokens
-        gather_h2_idx = h2_indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-        k_h2_cand = torch.gather(k_full, -2, gather_h2_idx)
-        v_h2_cand = torch.gather(v_full, -2, gather_h2_idx)
-        pos_h2_cand = torch.gather(pos_full, -1, h2_indices)
-
-        eps_h2 = self._compute_reconstruction_error(layer_idx, k_h2_cand, v_h2_cand, pos_h2_cand)
-
-        # Number of H2 tokens to put into Retain
-        n_r_h2 = n_r - k_recent
-
-        if n_r_h2 > 0 and n_a > 0:
-            # Highest eps -> Retain (hardest to approximate)
-            # Lowest eps -> Approximate (collinear, easy to approximate)
-            _, sorted_eps_idx = torch.sort(eps_h2, dim=-1, descending=True)
-            retain_h2_subidx = sorted_eps_idx[..., :n_r_h2]
-            approx_h2_subidx = sorted_eps_idx[..., n_r_h2:]
-
-            retain_past_indices = torch.gather(h2_indices, -1, retain_h2_subidx)
-            approx_past_indices = torch.gather(h2_indices, -1, approx_h2_subidx)
-        elif n_r_h2 > 0 and n_a == 0:
-            retain_past_indices = h2_indices
-            approx_past_indices = torch.empty((batch_size, num_heads, 0), device=device, dtype=torch.long)
-        else:
-            retain_past_indices = torch.empty((batch_size, num_heads, 0), device=device, dtype=torch.long)
-            approx_past_indices = h2_indices
-
-        # Full Retain tokens = retain_past_indices + recent_indices
-        full_retain_global_indices = torch.cat([retain_past_indices, recent_indices], dim=-1)
-        full_retain_global_indices, _ = torch.sort(full_retain_global_indices, dim=-1)
-
-        full_approx_global_indices, _ = torch.sort(approx_past_indices, dim=-1)
-
-        # Stored keys are the cand_indices of length N_K
-        # Now find relative positions of retain and approx tokens inside cand_indices (0 .. N_K - 1)
-        # Using searchsorted or equality check
-        cand_expanded = cand_indices.unsqueeze(-1)  # [B, H, N_K, 1]
-        retain_expanded = full_retain_global_indices.unsqueeze(-2)  # [B, H, 1, N_R]
-        retain_mask = (cand_expanded == retain_expanded).any(dim=-1)  # [B, H, N_K]
+        """Delegates partitioning to VectorBudgetPartitioner."""
+        res: PartitionResult = self.partitioner.partition(
+            layer_idx=layer_idx,
+            k_full=k_full,
+            v_full=v_full,
+            pos_full=pos_full,
+            target_budget=target_budget,
+            accumulated_scores=self.accumulated_scores[layer_idx],
+            cached_eps=self._cached_eps[layer_idx],
+            reconstructor=self.reconstructor,
+        )
 
         # Store persistent state
-        self._key_cache[layer_idx] = k_cand
-        gather_v_retain = full_retain_global_indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-        self._value_cache[layer_idx] = torch.gather(v_full, -2, gather_v_retain)
-        self._stored_positions[layer_idx] = pos_cand
+        self._key_cache[layer_idx] = res.k_cand
+        self._value_cache[layer_idx] = res.v_retain
+        self._stored_positions[layer_idx] = res.pos_cand
+        self._retain_indices[layer_idx] = res.retain_rel
+        self._approx_indices[layer_idx] = res.approx_rel
         self.is_pruned[layer_idx] = True
 
-        # Map indices within k_cand
-        # retain_rel_indices: shape [B, H, N_R]
-        # approx_rel_indices: shape [B, H, N_A]
-        retain_rel_list = []
-        approx_rel_list = []
-        for b in range(batch_size):
-            b_ret_heads = []
-            b_app_heads = []
-            for h in range(num_heads):
-                ret_idx = torch.nonzero(retain_mask[b, h], as_tuple=False).squeeze(-1)
-                app_idx = torch.nonzero(~retain_mask[b, h], as_tuple=False).squeeze(-1)
-                b_ret_heads.append(ret_idx)
-                b_app_heads.append(app_idx)
-            retain_rel_list.append(torch.stack(b_ret_heads, dim=0))
-            approx_rel_list.append(torch.stack(b_app_heads, dim=0))
+        # Prune cached eps and accumulated scores
+        if self._cached_eps[layer_idx] is not None:
+            self._cached_eps[layer_idx] = torch.gather(self._cached_eps[layer_idx], -1, res.cand_indices)
+        if self.accumulated_scores[layer_idx] is not None:
+            self.accumulated_scores[layer_idx] = torch.gather(self.accumulated_scores[layer_idx], -1, res.cand_indices)
 
-        self._retain_indices[layer_idx] = torch.stack(retain_rel_list, dim=0)
-        self._approx_indices[layer_idx] = torch.stack(approx_rel_list, dim=0)
-
-        # Update accumulated scores to match candidate tokens
-        if scores is not None:
-            self.accumulated_scores[layer_idx] = torch.gather(scores, -1, cand_indices)
-
-        # Reconstruct full V of size N_K to return for this attention step
-        v_returned = self._reconstruct_full_v(layer_idx, k_cand, device, k_full.dtype)
-        self._sync_dynamic_layers(layer_idx, k_cand, v_returned)
-        return k_cand, v_returned
-
-    def _reconstruct_full_v(
-        self,
-        layer_idx: int,
-        k_stored: torch.Tensor,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        """
-        Dynamically reconstructs full V of shape [batch, num_heads, N_K, head_dim]
-        by placing stored real values for Retain tokens and on-the-fly W_OLS predictions for Approximate tokens.
-        """
-        batch_size, num_heads, n_k, head_dim = k_stored.shape
-        v_out = torch.empty((batch_size, num_heads, n_k, head_dim), device=device, dtype=dtype)
-
-        v_retain = self._value_cache[layer_idx]
-        retain_rel = self._retain_indices[layer_idx]
-        approx_rel = self._approx_indices[layer_idx]
-        pos_stored = self._stored_positions[layer_idx]
-
-        # 1. Place Retain values
-        if v_retain is not None and retain_rel is not None and retain_rel.shape[-1] > 0:
-            scatter_ret_idx = retain_rel.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-            v_out.scatter_(-2, scatter_ret_idx, v_retain)
-
-        # 2. Reconstruct and place Approximate values
-        if approx_rel is not None and approx_rel.shape[-1] > 0:
-            gather_app_k = approx_rel.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-            k_approx = torch.gather(k_stored, -2, gather_app_k)
-            pos_approx = torch.gather(pos_stored, -1, approx_rel)
-
-            v_approx_hat = self._predict_v(layer_idx, k_approx, pos_approx)
-            scatter_app_idx = approx_rel.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-            v_out.scatter_(-2, scatter_app_idx, v_approx_hat.to(dtype))
-
-        return v_out
+        v_returned = self._reconstruct_full_v(layer_idx, self._key_cache[layer_idx], k_full.device, k_full.dtype)
+        self._sync_dynamic_layers(layer_idx, self._key_cache[layer_idx], v_returned)
+        return self._key_cache[layer_idx], v_returned
 
     def update(
         self,
@@ -476,12 +252,20 @@ class VectorKVCache(DynamicCache):
             self._retain_indices[layer_idx] = torch.arange(incoming_len, device=device).view(1, 1, -1).expand(batch_size, num_heads, -1)
             self._approx_indices[layer_idx] = torch.empty((batch_size, num_heads, 0), device=device, dtype=torch.long)
             self.is_pruned[layer_idx] = False
+            self._cached_eps[layer_idx] = self._compute_reconstruction_error(layer_idx, key_states, value_states, pos_incoming)
 
             if self.accumulated_scores[layer_idx] is None:
                 self.accumulated_scores[layer_idx] = torch.zeros((batch_size, num_heads, incoming_len), device=device, dtype=torch.float32)
 
             self._sync_dynamic_layers(layer_idx, key_states, value_states)
             return key_states, value_states
+
+        # Compute error for incoming tokens once and cache it (O(1) during decode steps)
+        incoming_eps = self._compute_reconstruction_error(layer_idx, key_states, value_states, pos_incoming)
+        if self._cached_eps[layer_idx] is not None:
+            self._cached_eps[layer_idx] = torch.cat([self._cached_eps[layer_idx], incoming_eps], dim=-1)
+        else:
+            self._cached_eps[layer_idx] = incoming_eps
 
         # Concatenate incoming states
         prev_k = self._key_cache[layer_idx]
@@ -494,10 +278,8 @@ class VectorKVCache(DynamicCache):
             target_budget = min(self.max_budget, target_budget)
         target_budget = max(target_budget, min(self.min_recent_tokens, total_len))
 
-        # During prefill (incoming_len > 1) or before exceeding budget:
-        # Keep everything in Retain
+        # During prefill (incoming_len > 1) or before exceeding budget: Keep everything in Retain
         if incoming_len > 1 or total_len <= target_budget:
-            # Reconstruct previous full V if it was compressed, then concatenate
             if self.is_pruned[layer_idx]:
                 v_full_prev = self._reconstruct_full_v(layer_idx, prev_k, device, dtype)
             else:
@@ -532,17 +314,11 @@ class VectorKVCache(DynamicCache):
         if curr_scores is not None:
             pad_len = k_full.shape[-2] - curr_scores.shape[-1]
             if pad_len > 0:
-                pad = torch.zeros(
-                    (batch_size, num_heads, pad_len),
-                    device=device,
-                    dtype=curr_scores.dtype,
-                )
+                pad = torch.zeros((batch_size, num_heads, pad_len), device=device, dtype=curr_scores.dtype)
                 self.accumulated_scores[layer_idx] = torch.cat([curr_scores, pad], dim=-1)
         else:
             self.accumulated_scores[layer_idx] = torch.zeros(
-                (batch_size, num_heads, k_full.shape[-2]),
-                device=device,
-                dtype=torch.float32,
+                (batch_size, num_heads, k_full.shape[-2]), device=device, dtype=torch.float32
             )
 
         return self._partition_and_prune(layer_idx, k_full, v_full, pos_full, target_budget)
@@ -560,10 +336,7 @@ class VectorKVCache(DynamicCache):
                 self.layers[layer_idx].values = v
 
     def get_memory_bytes(self) -> int:
-        """
-        Calculates exact physical bytes occupied by persistent KV tensors in memory.
-        Only counts stored K and physically stored V_retain (excluding temporary tensors).
-        """
+        """Calculates exact physical bytes occupied by persistent KV tensors in memory."""
         total_bytes = 0
         for k in self._key_cache:
             if k is not None:
