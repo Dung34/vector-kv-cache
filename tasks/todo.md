@@ -5,10 +5,14 @@
   - Body: Retain fixed 4-16 initial tokens without eviction to stabilize attention distribution.
   - Acceptance Criteria: Both H2O and VECTOR preserve initial tokens; perplexity does not explode.
   - Verification: `python -m unittest tests.test_h2o_cache tests.test_vector_cache` passes.
-- [x] Task 2: Vectorize Partitioning and Cache Reconstruction Error <!-- id: 2 -->
-  - Body: Eliminate Python head-loops with `torch.nonzero()`, cache $\epsilon_i$ per token so it is evaluated only once on arrival.
-  - Acceptance Criteria: Throughput on decode step increases significantly (>20-30 tokens/s on GPU).
-  - Verification: Latency timer benchmark shows speedup > 5x.
+- [x] Task 1.3: Optimize Pruning with Pre-allocated Index Buffers & Redundant Sort Elimination <!-- id: 1.3 -->
+  - Body: Cache sink and recent indices, eliminate full `torch.sort` on concatenated indices in `h2o_cache.py` and `partitioner.py`.
+  - Acceptance Criteria: Pruning passes all existing unit tests without allocating fresh `arange` buffers every step.
+  - Verification: `python -m unittest tests.test_h2o_cache tests.test_partitioner` passes.
+- [x] Task 1.4: Decouple Prefill ($T_{\text{prefill}}$ ms) and Decode ($T_{\text{decode}}$ tok/s) in Benchmarks <!-- id: 1.4 -->
+  - Body: Implement clean benchmark routine measuring prefill latency (TTFT) and decode tokens/sec separately with CUDA synchronization.
+  - Acceptance Criteria: Benchmark table explicitly outputs Prefill (ms) and Decode (tok/s).
+  - Verification: Run benchmark cell and verify table output contains both decoupled metrics.
 
 ## Checkpoint: Core Stability
 - [x] Attention distribution verified stable

@@ -126,6 +126,49 @@ class TestH2OKVCache(unittest.TestCase):
             "Initial sink tokens must be permanently retained regardless of scores!"
         )
 
+    def test_cached_index_buffers_and_monotonicity(self):
+        """
+        Verifies that cached index buffers are reused across decode steps,
+        and that pruning keeps the cache monotonic without full sorting overhead.
+        """
+        batch_size = 1
+        num_heads = 2
+        seq_len = 80
+        head_dim = 16
+        cache = H2OKVCache(compression_ratio=0.5, num_sink_tokens=4, min_recent_tokens=8)
+
+        # Prefill: buffers should not be allocated yet
+        self.assertIsNone(cache._cached_sink_indices)
+        self.assertIsNone(cache._cached_recent_offsets)
+
+        k_mock = torch.arange(seq_len, dtype=torch.float32).view(1, 1, seq_len, 1).expand(batch_size, num_heads, seq_len, head_dim)
+        v_mock = torch.randn(batch_size, num_heads, seq_len, head_dim)
+        cache.update(k_mock, v_mock, layer_idx=0)
+
+        # Step 1: Decode token
+        k_step = torch.full((batch_size, num_heads, 1, head_dim), float(seq_len), dtype=torch.float32)
+        v_step = torch.randn(batch_size, num_heads, 1, head_dim)
+        k_out1, _ = cache.update(k_step, v_step, layer_idx=0)
+
+        # Check buffers are created
+        self.assertIsNotNone(cache._cached_sink_indices)
+        self.assertIsNotNone(cache._cached_recent_offsets)
+        sink_buf_ref = cache._cached_sink_indices
+        recent_buf_ref = cache._cached_recent_offsets
+
+        # Step 2: Next decode token
+        k_step2 = torch.full((batch_size, num_heads, 1, head_dim), float(seq_len + 1), dtype=torch.float32)
+        v_step2 = torch.randn(batch_size, num_heads, 1, head_dim)
+        k_out2, _ = cache.update(k_step2, v_step2, layer_idx=0)
+
+        # Buffers must be the exact same objects in memory (reused!)
+        self.assertIs(cache._cached_sink_indices, sink_buf_ref)
+        self.assertIs(cache._cached_recent_offsets, recent_buf_ref)
+
+        # Token positions in k_out2 must be strictly monotonically increasing
+        positions = k_out2[0, 0, :, 0]
+        self.assertTrue(torch.all(positions[1:] > positions[:-1]), "KV cache must remain strictly sorted!")
+
 
 if __name__ == "__main__":
     unittest.main()

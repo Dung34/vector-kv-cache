@@ -35,10 +35,13 @@ Mục tiêu của kế hoạch này là rà soát toàn diện từ đặc tả 
 - [x] **Task 1.1: Bổ sung Cơ Chế Attention Sink (Initial Tokens) cho Baseline H2O và VECTOR**
   - Lưu giữ cố định `num_sink_tokens` (mặc định 4 hoặc 8 tokens) không bao giờ bị evict.
   - Kiểm chứng: Perplexity phục hồi, không còn sinh ký tự vô nghĩa khi nén.
-- [x] **Task 1.2: Tối Ưu Hóa Tốc Độ Decode (Vectorization & Error Caching)**
-  - Vector hóa logic phân vùng, loại bỏ vòng lặp `for b in ... for h in ...` và `torch.nonzero()`.
-  - Cache lại $\epsilon_i$ của các token đã tính, decode step chỉ cần tính $\epsilon$ cho token mới.
-  - Kiểm chứng: Throughput giải mã trên GPU tăng từ ~3.9 t/s lên $\ge 25\text{--}35$ t/s.
+- [x] **Task 1.3: Tối Ưu Hóa Pruning Buffer (Pre-allocated Index Buffers & Redundant Sort/Arange Elimination)**
+  - Tái sử dụng index buffer cố định cho sink tokens và recent tokens, loại bỏ `torch.arange` và `torch.sort` toàn mảng lặp lại ở từng decode step.
+  - Kiểm chứng: Giảm thiểu kernel launch latency, tăng tốc độ xử lý ở tỷ lệ nén cao (85%).
+- [x] **Task 1.4: Chuẩn Hóa Phép Đo Đối Chuẩn (Tách Biệt Prefill $T_{\text{prefill}}$ và Decode $T_{\text{decode}}$)**
+  - Tách hàm benchmark thành 2 pha độc lập: Prompt Prefill (Time-To-First-Token, ms) và Token-by-Token Decode (Throughput tok/s thuần túy & Inter-Token Latency ms/tok).
+  - Cập nhật notebook `kaggle_baseline_full_h2o_v2.ipynb` và các báo cáo tự động.
+  - Kiểm chứng: Số liệu khoa học minh bạch, tách bạch chi phí Prefill khỏi Decode.
 
 ### Giai đoạn 2: Tái Đánh Giá Thực Nghiệm Cốt Lõi (Core Verification)
 - [ ] **Task 2.1: Chạy lại Single-Needle NIAH trên H2O và VECTOR**

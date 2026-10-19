@@ -43,6 +43,8 @@ class VectorBudgetPartitioner:
         self.recent_ratio = recent_ratio
         self.min_recent_tokens = min_recent_tokens
         self.num_sink_tokens = num_sink_tokens
+        self._cached_sink_indices: Optional[torch.Tensor] = None
+        self._cached_recent_offsets: Optional[torch.Tensor] = None
 
     def compute_budgets(self, total_len: int, target_budget: int) -> Tuple[int, int, int, int, int]:
         """
@@ -139,14 +141,26 @@ class VectorBudgetPartitioner:
             retain_past_indices = torch.empty((batch_size, num_heads, 0), device=device, dtype=torch.long)
             approx_past_indices = h2_indices
 
-        # 3. Concatenate Sinks, Retain H2, and Recent indices
-        sink_indices = torch.arange(
-            0, k_sink, device=device, dtype=torch.long
-        ).view(1, 1, k_sink).expand(batch_size, num_heads, -1)
+        # 3. Concatenate Sinks, Retain H2, and Recent indices (reusing cached buffers)
+        if (
+            self._cached_sink_indices is None
+            or self._cached_sink_indices.shape[-1] != k_sink
+            or self._cached_sink_indices.device != device
+        ):
+            self._cached_sink_indices = torch.arange(
+                0, k_sink, device=device, dtype=torch.long
+            ).view(1, 1, k_sink)
+        sink_indices = self._cached_sink_indices.expand(batch_size, num_heads, -1)
 
-        recent_indices = torch.arange(
-            cand_end, total_len, device=device, dtype=torch.long
-        ).view(1, 1, k_recent).expand(batch_size, num_heads, -1)
+        if (
+            self._cached_recent_offsets is None
+            or self._cached_recent_offsets.shape[-1] != k_recent
+            or self._cached_recent_offsets.device != device
+        ):
+            self._cached_recent_offsets = torch.arange(
+                0, k_recent, device=device, dtype=torch.long
+            ).view(1, 1, k_recent)
+        recent_indices = cand_end + self._cached_recent_offsets.expand(batch_size, num_heads, -1)
 
         full_retain_indices = torch.cat([sink_indices, retain_past_indices, recent_indices], dim=-1)
         full_retain_indices, _ = torch.sort(full_retain_indices, dim=-1)

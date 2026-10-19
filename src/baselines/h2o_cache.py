@@ -50,6 +50,9 @@ class H2OKVCache(DynamicCache):
         self._value_cache: List[torch.Tensor] = []
         # Accumulated attention scores: [batch_size, num_kv_heads, seq_len]
         self.accumulated_scores: List[torch.Tensor] = []
+        # Cached index buffers to eliminate repetitive GPU memory allocation
+        self._cached_sink_indices: Optional[torch.Tensor] = None
+        self._cached_recent_offsets: Optional[torch.Tensor] = None
 
     @property
     def name(self) -> str:
@@ -74,6 +77,8 @@ class H2OKVCache(DynamicCache):
         self._key_cache = []
         self._value_cache = []
         self.active_budget = self.max_budget
+        self._cached_sink_indices = None
+        self._cached_recent_offsets = None
         if hasattr(self, "layers"):
             self.layers = []
 
@@ -201,29 +206,38 @@ class H2OKVCache(DynamicCache):
             self._sync_dynamic_layers(layer_idx, k_full, v_full)
             return k_full, v_full
 
-        # Sinks indices
-        sink_indices = torch.arange(
-            0, k_sink, device=key_states.device, dtype=torch.long
-        ).view(1, 1, k_sink).expand(batch_size, num_heads, -1)
+        # Sinks indices (reused from cache buffer to avoid GPU memory allocations)
+        if (
+            self._cached_sink_indices is None
+            or self._cached_sink_indices.shape[-1] != k_sink
+            or self._cached_sink_indices.device != key_states.device
+        ):
+            self._cached_sink_indices = torch.arange(
+                0, k_sink, device=key_states.device, dtype=torch.long
+            ).view(1, 1, k_sink)
+        sink_indices = self._cached_sink_indices.expand(batch_size, num_heads, -1)
 
-        # Recent indices for each batch & head
-        recent_indices = torch.arange(
-            cand_end,
-            total_len,
-            device=key_states.device,
-            dtype=torch.long
-        ).view(1, 1, k_recent).expand(batch_size, num_heads, -1)
+        # Recent indices for each batch & head (reused offset buffer)
+        if (
+            self._cached_recent_offsets is None
+            or self._cached_recent_offsets.shape[-1] != k_recent
+            or self._cached_recent_offsets.device != key_states.device
+        ):
+            self._cached_recent_offsets = torch.arange(
+                0, k_recent, device=key_states.device, dtype=torch.long
+            ).view(1, 1, k_recent)
+        recent_indices = cand_end + self._cached_recent_offsets.expand(batch_size, num_heads, -1)
 
         # Top-k Heavy Hitters selection across candidate middle tokens
         if k_h2 > 0:
             scores = self.accumulated_scores[layer_idx][..., cand_start:cand_end]
             _, h2_sub_indices = torch.topk(scores, k=k_h2, dim=-1, largest=True, sorted=False)
-            h2_indices = cand_start + h2_sub_indices
+            h2_sub_sorted, _ = torch.sort(h2_sub_indices, dim=-1)
+            h2_indices = cand_start + h2_sub_sorted
+            # Since sink_indices < h2_indices < recent_indices, concatenation is strictly monotonic
             selected_indices = torch.cat([sink_indices, h2_indices, recent_indices], dim=-1)
         else:
             selected_indices = torch.cat([sink_indices, recent_indices], dim=-1)
-
-        selected_indices, _ = torch.sort(selected_indices, dim=-1)
 
         # Step 5: Gather K and V using selected indices
         gather_indices = selected_indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
