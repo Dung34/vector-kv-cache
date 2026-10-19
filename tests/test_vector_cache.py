@@ -361,6 +361,25 @@ class TestVectorKVCache(unittest.TestCase):
             f"Target token {target_token_idx} with high query attention was evicted! Stored: {stored_list}"
         )
 
+    def test_get_mask_sizes_robustness(self):
+        cache = VectorKVCache(compression_ratio=0.5, approx_ratio=0.2, w_ols=self.w_ols)
+        # Empty cache
+        self.assertEqual(cache.get_mask_sizes(torch.arange(10), layer_idx=0), (10, 0))
+        self.assertEqual(cache.get_mask_sizes(10, layer_idx=0), (10, 0))
+        self.assertEqual(cache.get_mask_sizes(0), (0, 0)) # 1 arg: layer_idx = 0
+        self.assertEqual(cache.get_mask_sizes(), (0, 0)) # 0 args
+        self.assertEqual(cache.get_mask_sizes(None, None), (0, 0))
+        self.assertEqual(cache.get_mask_sizes(torch.tensor(5)), (1, 0)) # 0D tensor
+        self.assertEqual(cache.get_mask_sizes([1, 2, 3]), (3, 0)) # list
+
+        # After adding 20 tokens
+        cache._key_cache = [torch.randn(1, 2, 20, 64)]
+        self.assertEqual(cache.get_seq_length(0), 20)
+        self.assertEqual(cache.get_seq_length(None), 20)
+        self.assertEqual(cache.get_mask_sizes(torch.tensor([20]), layer_idx=0), (21, 0))
+        self.assertEqual(cache.get_mask_sizes(1, layer_idx=0), (21, 0))
+        self.assertEqual(cache.get_mask_sizes(0), (20, 0)) # 1 arg: layer_idx = 0
+
 
 if __name__ == "__main__":
     unittest.main()

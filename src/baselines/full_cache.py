@@ -57,6 +57,50 @@ class FullKVCacheWrapper(DynamicCache):
         if hasattr(self, "value_cache_list"):
             self.value_cache_list = []
 
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        idx = 0 if layer_idx is None else layer_idx
+        if hasattr(self, "layers") and self.layers and idx < len(self.layers):
+            return self.layers[idx].get_seq_length()
+        cache = getattr(self, "key_cache_list", None) or getattr(self, "_key_cache", None)
+        if not cache or idx >= len(cache) or cache[idx] is None:
+            return 0
+        return cache[idx].shape[-2]
+
+    def get_mask_sizes(
+        self,
+        cache_position: Any = None,
+        layer_idx: Optional[int] = None,
+    ) -> Tuple[int, int]:
+        """Return (kv_length, kv_offset) for causal attention mask generation."""
+        actual_layer_idx = 0
+        query_len = 0
+
+        if layer_idx is None and isinstance(cache_position, int):
+            actual_layer_idx = cache_position
+            query_len = 0
+        else:
+            if layer_idx is not None:
+                actual_layer_idx = int(layer_idx)
+
+            if cache_position is None:
+                query_len = 0
+            elif isinstance(cache_position, torch.Tensor):
+                query_len = cache_position.shape[0] if cache_position.dim() > 0 else 1
+            elif hasattr(cache_position, "shape") and len(cache_position.shape) > 0:
+                query_len = cache_position.shape[0]
+            elif hasattr(cache_position, "__len__"):
+                query_len = len(cache_position)
+            elif isinstance(cache_position, int):
+                query_len = cache_position
+            else:
+                try:
+                    query_len = int(cache_position)
+                except Exception:
+                    query_len = 0
+
+        past_seen = self.get_seq_length(actual_layer_idx)
+        return (past_seen + query_len, 0)
+
     @property
     def key_cache(self) -> List[torch.Tensor]:
         """Backwards compatibility accessor for key tensors."""

@@ -69,15 +69,52 @@ class H2OKVCache(DynamicCache):
         return self._value_cache
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-        if not self._key_cache or layer_idx >= len(self._key_cache):
+        idx = 0 if layer_idx is None else layer_idx
+        if not self._key_cache or idx >= len(self._key_cache) or self._key_cache[idx] is None:
             return 0
-        return self._key_cache[layer_idx].shape[-2]
+        return self._key_cache[idx].shape[-2]
 
-    def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int = 0) -> Tuple[int, int]:
-        """Return (kv_length, kv_offset) for causal attention mask generation."""
-        query_length = cache_position.shape[0] if cache_position is not None else 0
-        past_seen_tokens = self.get_seq_length(layer_idx)
-        return (past_seen_tokens + query_length, 0)
+    def get_mask_sizes(
+        self,
+        cache_position: Any = None,
+        layer_idx: Optional[int] = None,
+    ) -> Tuple[int, int]:
+        """
+        Return (kv_length, kv_offset) for causal attention mask generation.
+        Fully backward and forward compatible with all Hugging Face transformers versions:
+          - get_mask_sizes(layer_idx)                [1 arg: int]
+          - get_mask_sizes(cache_position)          [1 arg: Tensor]
+          - get_mask_sizes(cache_position, layer_idx) [2 args: Tensor, int]
+          - get_mask_sizes(query_len, layer_idx)     [2 args: int, int]
+        """
+        actual_layer_idx = 0
+        query_len = 0
+
+        if layer_idx is None and isinstance(cache_position, int):
+            actual_layer_idx = cache_position
+            query_len = 0
+        else:
+            if layer_idx is not None:
+                actual_layer_idx = int(layer_idx)
+
+            if cache_position is None:
+                query_len = 0
+            elif isinstance(cache_position, torch.Tensor):
+                query_len = cache_position.shape[0] if cache_position.dim() > 0 else 1
+            elif hasattr(cache_position, "shape") and len(cache_position.shape) > 0:
+                query_len = cache_position.shape[0]
+            elif hasattr(cache_position, "__len__"):
+                query_len = len(cache_position)
+            elif isinstance(cache_position, int):
+                query_len = cache_position
+            else:
+                try:
+                    query_len = int(cache_position)
+                except Exception:
+                    query_len = 0
+
+        past_seen = self.get_seq_length(actual_layer_idx)
+        return (past_seen + query_len, 0)
 
     def reset_scores(self):
         """Reset accumulated scores and storage for a new sequence generation."""
