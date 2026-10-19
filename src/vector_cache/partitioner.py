@@ -63,8 +63,9 @@ class VectorBudgetPartitioner:
         if k_sink + k_recent > target_budget:
             k_recent = max(1, target_budget - k_sink)
 
-        # Retain value budget: N_R
-        n_r = max(k_sink + k_recent, target_budget - int(self.approx_ratio * total_len))
+        # Retain value budget: N_R (derived from target_budget to guarantee stability during decode)
+        approx_slots = int((self.approx_ratio / max(1e-5, 1.0 - self.compression_ratio)) * target_budget)
+        n_r = max(k_sink + k_recent, target_budget - approx_slots)
 
         # Total keys budget: N_K = 2 * target_budget - N_R
         n_k = min(total_len, 2 * target_budget - n_r)

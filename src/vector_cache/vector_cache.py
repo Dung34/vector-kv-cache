@@ -51,6 +51,7 @@ class VectorKVCache(DynamicCache):
         self.min_recent_tokens = min_recent_tokens
         self.num_sink_tokens = num_sink_tokens
         self.max_budget = max_budget
+        self.active_budget = max_budget
         self.rope_theta = rope_theta
         self.rotary_emb = rotary_emb
 
@@ -116,6 +117,7 @@ class VectorKVCache(DynamicCache):
         self._stored_positions = []
         self._cached_eps = []
         self.is_pruned = []
+        self.active_budget = self.max_budget
         if hasattr(self, "layers"):
             self.layers = []
 
@@ -271,12 +273,16 @@ class VectorKVCache(DynamicCache):
         prev_k = self._key_cache[layer_idx]
         prev_pos = self._stored_positions[layer_idx]
 
-        # Determine target budget
+        # Determine target budget (fixed once from prefill length, preventing recursive compression)
         total_len = prev_k.shape[-2] + incoming_len
-        target_budget = int((1.0 - self.compression_ratio) * total_len)
-        if self.max_budget is not None:
-            target_budget = min(self.max_budget, target_budget)
-        target_budget = max(target_budget, min(self.min_recent_tokens, total_len))
+        if self.active_budget is None:
+            if self.max_budget is not None:
+                self.active_budget = min(self.max_budget, int((1.0 - self.compression_ratio) * total_len))
+            else:
+                self.active_budget = int((1.0 - self.compression_ratio) * total_len)
+            self.active_budget = max(self.active_budget, min(self.min_recent_tokens, total_len))
+
+        target_budget = self.active_budget
 
         # During prefill (incoming_len > 1) or before exceeding budget: Keep everything in Retain
         if incoming_len > 1 or total_len <= target_budget:

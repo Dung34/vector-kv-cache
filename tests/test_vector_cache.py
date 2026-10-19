@@ -267,6 +267,50 @@ class TestVectorKVCache(unittest.TestCase):
             n_k = cache._key_cache[0].shape[-2]
             self.assertEqual(cache._cached_eps[0].shape[-1], n_k)
 
+    def test_multistep_decode_budget_stability(self):
+        """
+        Verifies that across 20 consecutive decode steps, the KV cache budget remains
+        strictly constant at 2 * target_budget and does NOT suffer from recursive compression.
+        """
+        compression_ratio = 0.75
+        approx_ratio = 0.15
+        cache = VectorKVCache(
+            compression_ratio=compression_ratio,
+            approx_ratio=approx_ratio,
+            recent_ratio=0.10,
+            min_recent_tokens=4,
+            w_ols=self.w_ols,
+        )
+
+        prefill_len = 100
+        k_prefill = torch.randn(self.batch_size, self.num_heads, prefill_len, self.head_dim)
+        v_prefill = torch.randn(self.batch_size, self.num_heads, prefill_len, self.head_dim)
+        cache.update(k_prefill, v_prefill, layer_idx=0)
+
+        expected_budget = int((1.0 - compression_ratio) * (prefill_len + 1))  # 25 tokens
+        initial_mem = None
+
+        # Run 20 decode steps
+        for step in range(20):
+            k_tok = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+            v_tok = torch.randn(self.batch_size, self.num_heads, 1, self.head_dim)
+            cache.update(k_tok, v_tok, layer_idx=0)
+
+            n_k = cache._key_cache[0].shape[-2]
+            n_r = cache._value_cache[0].shape[-2]
+            self.assertEqual(
+                n_k + n_r,
+                2 * expected_budget,
+                f"Step {step}: Invariance violated! n_k={n_k}, n_r={n_r}, expected {2*expected_budget}"
+            )
+            self.assertGreaterEqual(n_k, expected_budget)
+
+            mem_bytes = cache.get_memory_bytes()
+            if initial_mem is None:
+                initial_mem = mem_bytes
+            else:
+                self.assertEqual(mem_bytes, initial_mem, f"Step {step}: Memory collapsed from {initial_mem} to {mem_bytes}")
+
 
 if __name__ == "__main__":
     unittest.main()
