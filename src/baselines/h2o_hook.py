@@ -59,11 +59,6 @@ class H2OAttentionHookManager:
         """Register forward hooks onto all self_attn modules of the model."""
         self.remove_hooks()
 
-        # Ensure model config produces attention weights
-        if hasattr(self.model, "config"):
-            self._orig_output_attentions = getattr(self.model.config, "output_attentions", False)
-            self.model.config.output_attentions = True
-
         # Find layers container (supports model.layers, model.model.layers, etc.)
         layers = None
         for path in ["model.layers", "layers", "transformer.h", "decoder.layers"]:
@@ -106,8 +101,6 @@ class H2OAttentionHookManager:
         for handle in self.hooks:
             handle.remove()
         self.hooks = []
-        if hasattr(self, "_orig_output_attentions") and hasattr(self.model, "config"):
-            self.model.config.output_attentions = self._orig_output_attentions
 
     def __enter__(self):
         self.register_hooks()
