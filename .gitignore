@@ -84,8 +84,10 @@ wandb/
 Ref-*.zip
 
 # ==============================================================================
-# Operating System Artifacts
+# Operating System & Local Tool Artifacts
 # ==============================================================================
 .DS_Store
 Thumbs.db
 desktop.ini
+.codegraph/
+scratch/
