@@ -32,10 +32,10 @@ Mục tiêu của kế hoạch này là rà soát toàn diện từ đặc tả 
 ## 3. Kế Hoạch Triển Khai Nhiệm Vụ (Task List)
 
 ### Giai đoạn 1: Sửa Lỗi Tử Huyệt Thuật Toán & Ổn Định Suy Luận (Fix Sinks & Throughput)
-- [ ] **Task 1.1: Bổ sung Cơ Chế Attention Sink (Initial Tokens) cho Baseline H2O và VECTOR**
+- [x] **Task 1.1: Bổ sung Cơ Chế Attention Sink (Initial Tokens) cho Baseline H2O và VECTOR**
   - Lưu giữ cố định `num_sink_tokens` (mặc định 4 hoặc 8 tokens) không bao giờ bị evict.
   - Kiểm chứng: Perplexity phục hồi, không còn sinh ký tự vô nghĩa khi nén.
-- [ ] **Task 1.2: Tối Ưu Hóa Tốc Độ Decode (Vectorization & Error Caching)**
+- [x] **Task 1.2: Tối Ưu Hóa Tốc Độ Decode (Vectorization & Error Caching)**
   - Vector hóa logic phân vùng, loại bỏ vòng lặp `for b in ... for h in ...` và `torch.nonzero()`.
   - Cache lại $\epsilon_i$ của các token đã tính, decode step chỉ cần tính $\epsilon$ cho token mới.
   - Kiểm chứng: Throughput giải mã trên GPU tăng từ ~3.9 t/s lên $\ge 25\text{--}35$ t/s.

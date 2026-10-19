@@ -60,6 +60,21 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Code Architecture & Modularity Standards (Project III Standard)
+
+**Keep modules decoupled, focused, and under single-responsibility limits.**
+
+- **File Size Limit:** Keep files $\le 250\text{--}300$ lines. If a file exceeds this and manages multiple distinct concerns, decompose it immediately into specialized submodules.
+- **Layered Separation of Concerns:**
+  - `Policy / Algorithmic`: Pure tensor logic (e.g. `partitioner.py`). Takes input tensors, returns indices/masks, zero framework coupling.
+  - `Math / Engine`: Approximation, transforms, and equations (e.g. `reconstructor.py`, RoPE decoupling, $W_{\text{OLS}}$).
+  - `Container / Wrapper`: Framework lifecycle integration (e.g. `vector_cache.py` subclassing Hugging Face `DynamicCache`). Coordinates Policy and Math.
+  - `Hooks`: Interception managers (e.g. `vector_hook.py`, forward hooks).
+- **Public API Invariance:**
+  - Always export primary classes at package `__init__.py`. External code (scripts, notebooks, benchmarks) must never break when internal files are decomposed.
+- **TDD for Submodules:** Every extracted submodule MUST have its own standalone unit test running in $< 0.1\text{s}$ on CPU with mock tensors.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
