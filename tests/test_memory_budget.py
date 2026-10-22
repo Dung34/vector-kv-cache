@@ -1,4 +1,6 @@
 import unittest
+import gc
+import weakref
 
 import torch
 
@@ -7,6 +9,18 @@ from src.vector_cache.vector_cache import VectorKVCache
 
 
 class TestMemoryBudget(unittest.TestCase):
+    def test_h2o_releases_replaced_cache_tensor(self):
+        cache = H2OKVCache(target_budget=16, max_physical_budget=16)
+        old_states = torch.randn(1, 2, 16, 4)
+        cache.update(old_states, old_states, layer_idx=0)
+        old_ref = weakref.ref(cache._key_cache[0])
+        del old_states
+        new_states = torch.randn(1, 2, 1, 4)
+        cache.update(new_states, new_states, layer_idx=0)
+        del new_states
+        gc.collect()
+        self.assertIsNone(old_ref())
+
     def test_h2o_prune_keeps_scores_aligned_without_empty_cache(self):
         original_empty_cache = torch.cuda.empty_cache
         torch.cuda.empty_cache = lambda: (_ for _ in ()).throw(AssertionError("empty_cache is not part of cache update"))
@@ -93,6 +107,25 @@ class TestMemoryBudget(unittest.TestCase):
             )
         finally:
             torch.cuda.empty_cache = original_empty_cache
+
+    def test_vector_releases_replaced_cache_tensor(self):
+        cache = VectorKVCache(
+            compression_ratio=0.5,
+            approx_ratio=0.1,
+            target_budget=16,
+            max_physical_budget=32,
+            min_recent_tokens=4,
+            w_ols=torch.eye(4).unsqueeze(0).unsqueeze(0),
+        )
+        old_states = torch.randn(1, 2, 16, 4)
+        cache.update(old_states, old_states, layer_idx=0)
+        old_ref = weakref.ref(cache._key_cache[0])
+        del old_states
+        new_states = torch.randn(1, 2, 1, 4)
+        cache.update(new_states, new_states, layer_idx=0)
+        del new_states
+        gc.collect()
+        self.assertIsNone(old_ref())
 
     def test_vector_rejects_incompatible_budgets(self):
         with self.assertRaisesRegex(ValueError, "requires more physical keys"):
