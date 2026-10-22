@@ -45,6 +45,7 @@ class H2OKVCache(DynamicCache):
         self.max_budget = max_budget
         self.active_budget: Optional[int] = max_budget
         self.is_prefilling: bool = False
+        self._seen_tokens: int = 0
 
         # Storage per layer
         self._key_cache: List[torch.Tensor] = []
@@ -68,11 +69,16 @@ class H2OKVCache(DynamicCache):
     def value_cache(self) -> List[torch.Tensor]:
         return self._value_cache
 
-    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+    def _physical_len(self, layer_idx: Optional[int] = 0) -> int:
         idx = 0 if layer_idx is None else layer_idx
         if not self._key_cache or idx >= len(self._key_cache) or self._key_cache[idx] is None:
             return 0
         return self._key_cache[idx].shape[-2]
+
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        if self._seen_tokens > 0:
+            return self._seen_tokens
+        return self._physical_len(layer_idx)
 
     def get_mask_sizes(
         self,
@@ -81,11 +87,7 @@ class H2OKVCache(DynamicCache):
     ) -> Tuple[int, int]:
         """
         Return (kv_length, kv_offset) for causal attention mask generation.
-        Fully backward and forward compatible with all Hugging Face transformers versions:
-          - get_mask_sizes(layer_idx)                [1 arg: int]
-          - get_mask_sizes(cache_position)          [1 arg: Tensor]
-          - get_mask_sizes(cache_position, layer_idx) [2 args: Tensor, int]
-          - get_mask_sizes(query_len, layer_idx)     [2 args: int, int]
+        Uses _physical_len to ensure attention_mask matches physical key tensor length.
         """
         actual_layer_idx = 0
         query_len = 0
@@ -113,8 +115,17 @@ class H2OKVCache(DynamicCache):
                 except Exception:
                     query_len = 0
 
-        past_seen = self.get_seq_length(actual_layer_idx)
-        return (past_seen + query_len, 0)
+        phys_len = self._physical_len(actual_layer_idx)
+        if query_len == 0:
+            kv_len = phys_len
+        elif query_len > 1:
+            kv_len = phys_len + query_len
+        else:
+            if self.active_budget is not None:
+                kv_len = min(phys_len + 1, self.active_budget)
+            else:
+                kv_len = phys_len + 1
+        return (kv_len, 0)
 
     def reset_scores(self):
         """Reset accumulated scores and storage for a new sequence generation."""
@@ -124,6 +135,7 @@ class H2OKVCache(DynamicCache):
         self._stored_positions = []
         self.active_budget = self.max_budget
         self.is_prefilling = False
+        self._seen_tokens = 0
         self._cached_sink_indices = None
         self._cached_recent_offsets = None
         if hasattr(self, "layers"):
@@ -176,6 +188,9 @@ class H2OKVCache(DynamicCache):
         Tensors have shape: [batch_size, num_heads, seq_len, head_dim]
         """
         batch_size, num_heads, incoming_len, head_dim = key_states.shape
+
+        if layer_idx == 0:
+            self._seen_tokens += incoming_len
 
         # Step 1: Initialize layer or concatenate incoming states
         if len(self._key_cache) <= layer_idx:
