@@ -142,19 +142,19 @@ Quy tắc sử dụng:
 
 **Công việc:**
 
-- [ ] Chạy H2O ít nhất 20 bước decode.
-- [ ] Chạy VECTOR ít nhất 20 bước decode.
-- [ ] Kiểm tra I1–I5 ở mọi bước.
-- [ ] Kiểm tra I6: `compression_ratio=0` cho output greedy giống Full-FP16.
-- [ ] Ghi bảng `step | seen_tokens | physical_len | mask_kv_len | position_id | scores_len`.
+- [x] Chạy H2O ít nhất 20 bước decode.
+- [x] Chạy VECTOR ít nhất 20 bước decode.
+- [x] Kiểm tra I1–I5 ở mọi bước.
+- [x] Kiểm tra I6: `compression_ratio=0` cho output greedy giống Full-FP16.
+- [x] Ghi bảng `step | seen_tokens | physical_len | mask_kv_len | position_id | scores_len`.
 - [ ] Kiểm tra NaN, exception và memory bound.
 
 **Acceptance criteria:**
 
-- [ ] Tất cả I1–I6 pass cho H2O.
-- [ ] Tất cả I1–I6 pass cho VECTOR.
-- [ ] Không có mismatch mask/K.
-- [ ] Không có output bất thường so với Full-FP16 ở chế độ không nén.
+- [x] Tất cả I1–I6 pass cho H2O.
+- [x] Tất cả I1–I6 pass cho VECTOR.
+- [x] Không có mismatch mask/K.
+- [x] Không có output bất thường so với Full-FP16 ở chế độ không nén.
 
 **Dependencies:** Phase 2b.
 
