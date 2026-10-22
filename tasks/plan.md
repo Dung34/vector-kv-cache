@@ -160,6 +160,16 @@ Quy tắc sử dụng:
 
 **Phase 3 evidence update (2026-10-22):** I1-I5 pass for H2O and VECTOR over 20 decode steps; I6 no-compression greedy output matches Full-FP16; full pytest passes. Evidence: `logs/phase3_i1_i5_final.log`, `logs/phase3_i6_no_compression_fixed.log`, `logs/phase3_full_pytest.log`. Explicit NaN scan remains pending.
 
+### Phase 3 checklist
+
+- [x] H2O: 20 decode steps
+- [x] VECTOR: 20 decode steps
+- [x] I1-I5 on every decode step
+- [x] I6: compression_ratio=0 matches Full-FP16 greedy output
+- [x] Attention mask length matches physical K length
+- [x] Full pytest suite passes
+- [ ] Explicit NaN scan
+
 **Checkpoint:** nếu Phase 3 chưa pass, không chạy benchmark 4096 token.
 
 ## Phase 4 — Benchmark thật và đánh giá chất lượng
