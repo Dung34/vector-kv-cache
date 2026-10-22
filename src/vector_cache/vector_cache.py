@@ -385,6 +385,8 @@ class VectorKVCache(DynamicCache):
             if self.max_physical_budget is not None:
                 self.active_budget = min(self.active_budget, self.max_physical_budget)
 
+        if self.compression_ratio == 0.0 and self.target_budget is None:
+            self.active_budget = total_len
         target_budget = self.active_budget
 
         # During prefill (incoming_len > 1 or is_prefilling) or before exceeding budget: Keep everything in Retain
