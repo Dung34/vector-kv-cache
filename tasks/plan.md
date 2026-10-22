@@ -178,18 +178,18 @@ Quy tắc sử dụng:
 
 **Công việc:**
 
-- [ ] Benchmark Full FP16, H2O và VECTOR.
-- [ ] Đo riêng prefill latency, decode throughput và inter-token latency.
-- [ ] Đo peak allocated/reserved VRAM và persistent KV bytes.
+- [x] Benchmark Full FP16, H2O và VECTOR ở workload CPU Qwen2 nhỏ.
+- [x] Đo riêng prefill latency, decode throughput và inter-token latency.
+- [x] Đo peak process working set và persistent KV bytes; VRAM ghi nhận `null` trên CPU.
 - [ ] Chạy single-needle và multi-needle NIAH.
-- [ ] So sánh output token đầu với Full-FP16.
-- [ ] Lưu JSON, bảng Markdown và log đầy đủ nonce/exit code/hash.
+- [x] So sánh output token đầu với Full-FP16.
+- [x] Lưu JSON, bảng Markdown và log đầy đủ nonce/exit code/hash.
 
 **Acceptance criteria:**
 
-- [ ] Báo cáo có context length, compression ratio, device và seed.
-- [ ] Không dùng số liệu từ run chưa có log.
-- [ ] Báo cáo tách rõ kết quả đo được và suy luận.
+- [x] Báo cáo có context length, compression ratio, device và seed.
+- [x] Không dùng số liệu từ run chưa có log.
+- [x] Báo cáo tách rõ kết quả đo được và suy luận.
 - [ ] Có kết luận riêng cho memory, throughput và recall.
 
 **Dependencies:** Phase 3.
