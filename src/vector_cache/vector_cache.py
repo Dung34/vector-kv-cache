@@ -36,6 +36,8 @@ class VectorKVCache(DynamicCache):
         min_recent_tokens: int = 32,         # minimum number of recent tokens to keep
         num_sink_tokens: int = 4,            # attention sink (initial tokens) to keep permanently in Retain
         max_budget: Optional[int] = None,    # optional hard cap on number of tokens
+        target_budget: Optional[int] = None,
+        max_physical_budget: Optional[int] = None,
         w_ols: Optional[Union[torch.Tensor, str, Dict[str, Any]]] = None,
         rope_theta: float = 1000000.0,       # default RoPE base frequency (Qwen2.5: 1M, Llama3: 500k)
         rotary_emb: Optional[Any] = None,
@@ -50,8 +52,14 @@ class VectorKVCache(DynamicCache):
         self.recent_ratio = recent_ratio
         self.min_recent_tokens = min_recent_tokens
         self.num_sink_tokens = num_sink_tokens
-        self.max_budget = max_budget
-        self.active_budget = max_budget
+        if target_budget is not None and max_budget is not None and target_budget != max_budget:
+            raise ValueError("target_budget and legacy max_budget must match when both are provided")
+        self.target_budget = target_budget if target_budget is not None else max_budget
+        self.max_budget = self.target_budget
+        self.max_physical_budget = max_physical_budget
+        if self.max_physical_budget is not None and self.max_physical_budget <= 0:
+            raise ValueError("max_physical_budget must be positive")
+        self.active_budget = self.target_budget
         self.is_prefilling: bool = False
         self._seen_tokens: int = 0
         self.rope_theta = rope_theta
@@ -65,6 +73,16 @@ class VectorKVCache(DynamicCache):
             min_recent_tokens=min_recent_tokens,
             num_sink_tokens=num_sink_tokens,
         )
+        if self.target_budget is not None and self.max_physical_budget is not None:
+            _, _, _, required_keys, _ = self.partitioner.compute_budgets(
+                total_len=max(2 * self.target_budget, self.target_budget + 1),
+                target_budget=self.target_budget,
+            )
+            if required_keys > self.max_physical_budget:
+                raise ValueError(
+                    "target_budget requires more physical keys than max_physical_budget "
+                    f"({required_keys} > {self.max_physical_budget})"
+                )
         self.reconstructor = VectorValueReconstructor(
             w_ols=w_ols,
             rope_theta=rope_theta,
@@ -261,6 +279,12 @@ class VectorKVCache(DynamicCache):
             reconstructor=self.reconstructor,
         )
 
+        if self.max_physical_budget is not None and res.k_cand.shape[-2] > self.max_physical_budget:
+            raise ValueError(
+                "partition exceeds max_physical_budget "
+                f"({res.k_cand.shape[-2]} > {self.max_physical_budget})"
+            )
+
         # Store persistent state
         self._key_cache[layer_idx] = res.k_cand
         self._value_cache[layer_idx] = res.v_retain
@@ -324,6 +348,18 @@ class VectorKVCache(DynamicCache):
             if self.accumulated_scores[layer_idx] is None:
                 self.accumulated_scores[layer_idx] = torch.zeros((batch_size, num_heads, incoming_len), device=device, dtype=torch.float32)
 
+            if self.max_physical_budget is not None and incoming_len > self.max_physical_budget:
+                target_budget = self.active_budget
+                if target_budget is None:
+                    target_budget = max(1, int((1.0 - self.compression_ratio) * incoming_len))
+                    self.active_budget = target_budget
+                return self._partition_and_prune(
+                    layer_idx,
+                    key_states,
+                    value_states,
+                    pos_incoming,
+                    target_budget,
+                )
             self._sync_dynamic_layers(layer_idx, key_states, value_states)
             return key_states, value_states
 
@@ -346,6 +382,8 @@ class VectorKVCache(DynamicCache):
             else:
                 self.active_budget = int((1.0 - self.compression_ratio) * total_len)
             self.active_budget = max(self.active_budget, min(self.min_recent_tokens, total_len))
+            if self.max_physical_budget is not None:
+                self.active_budget = min(self.active_budget, self.max_physical_budget)
 
         target_budget = self.active_budget
 
@@ -363,6 +401,16 @@ class VectorKVCache(DynamicCache):
             self._key_cache[layer_idx] = k_full
             self._value_cache[layer_idx] = v_full
             self._stored_positions[layer_idx] = pos_full
+            if self.max_physical_budget is not None and k_full.shape[-2] > self.max_physical_budget:
+                curr_scores = self.accumulated_scores[layer_idx]
+                if curr_scores is not None and curr_scores.shape[-1] < k_full.shape[-2]:
+                    pad = torch.zeros(
+                        (batch_size, num_heads, k_full.shape[-2] - curr_scores.shape[-1]),
+                        device=device,
+                        dtype=curr_scores.dtype,
+                    )
+                    self.accumulated_scores[layer_idx] = torch.cat([curr_scores, pad], dim=-1)
+                return self._partition_and_prune(layer_idx, k_full, v_full, pos_full, target_budget)
             self._retain_indices[layer_idx] = torch.arange(k_full.shape[-2], device=device).view(1, 1, -1).expand(batch_size, num_heads, -1)
             self._approx_indices[layer_idx] = torch.empty((batch_size, num_heads, 0), device=device, dtype=torch.long)
             self.is_pruned[layer_idx] = False

@@ -36,7 +36,9 @@ Quy tắc sử dụng:
 - `physical_len` dùng cho shape K/V thật và memory accounting.
 - `mask_kv_len` phải khớp K sau `cache.update()` ở mọi layer.
 - `accumulated_scores`, `_cached_eps` và position metadata phải được prune/gather cùng selected indices.
-- Nếu `max_budget` được cấu hình, `physical_len` không được vượt hard cap sau bất kỳ lần update nào, bao gồm prefill.
+- `target_budget` điều khiển phân bổ Budget Swap; không được dùng nó làm hard cap physical nếu thuật toán cần `N_K > target_budget`.
+- `max_physical_budget` là hard cap tùy chọn cho physical K/V và peak-memory safety.
+- Nếu `target_budget` và `max_physical_budget` xung đột, phải raise lỗi cấu hình rõ ràng; không tự động cắt key/value để che xung đột.
 
 ## Phase 0 — Xác nhận baseline trên HEAD hiện tại — COMPLETED
 
@@ -109,23 +111,28 @@ Quy tắc sử dụng:
 
 ## Phase 2b — Bảo vệ memory budget và peak memory
 
-**Mục tiêu:** biến `max_budget` thành hard cap thực sự và loại bỏ tăng trưởng bộ nhớ ngoài dự kiến.
+**Mục tiêu:** tách ngân sách thuật toán khỏi giới hạn physical memory, đồng thời loại bỏ tăng trưởng bộ nhớ ngoài dự kiến.
 
 **Công việc:**
 
-- [ ] Áp dụng budget ngay ở prefill đầu tiên.
-- [ ] Kiểm tra prefill một chunk và nhiều chunk với `incoming_len > 1`.
-- [ ] Đo persistent KV bytes và auxiliary bytes riêng biệt.
+- [x] Đổi API/cache state để phân biệt `target_budget` và `max_physical_budget`.
+- [x] Giữ Budget Swap theo `target_budget`; không dùng `target_budget` như physical hard cap.
+- [x] Kiểm tra compatibility trước khi chạy; cấu hình xung đột phải raise lỗi rõ ràng.
+- [x] Áp dụng `max_physical_budget` ngay ở prefill đầu tiên.
+- [x] Kiểm tra prefill một chunk và nhiều chunk với `incoming_len > 1`.
+- [x] Đo persistent KV bytes và auxiliary bytes riêng biệt.
 - [ ] Đo peak temporary memory trong `torch.cat`, partition và reconstruction.
 - [ ] Prune đồng bộ K, V, positions, scores và reconstruction errors.
 - [ ] Kiểm tra không giữ các tensor lớn cũ sau khi thay cache.
 
 **Acceptance criteria:**
 
-- [ ] Với mọi bước update, `physical_len <= max_budget`.
-- [ ] H2O và VECTOR đều bounded sau prefill và decode.
+- [x] Với mọi bước update, `physical_len <= max_physical_budget` khi cap được cấu hình.
+- [x] Cấu hình hợp lệ `target_budget=32, max_physical_budget=64` giữ được Budget Swap.
+- [x] Cấu hình xung đột `target_budget=32, max_physical_budget=32` bị từ chối rõ ràng.
+- [x] H2O và VECTOR đều bounded sau prefill và decode.
 - [ ] Không cần dùng `empty_cache()` để làm cho invariant có vẻ đúng.
-- [ ] Có log chứa memory table được tính từ tensor thật.
+- [x] Có log chứa memory table được tính từ tensor thật.
 
 **Dependencies:** Phase 2.
 
@@ -193,7 +200,8 @@ Mỗi phase chỉ commit sau khi verification tương ứng hoàn tất:
 |---|---:|---|
 | Mask được tính trước `cache.update()` | Cao | Xác minh bằng hook/source inspection ở Phase 0 |
 | `seen_tokens` bị thay bằng physical length | Cao | I1 và mutation test |
-| Prefill vượt `max_budget` | Cao | Hard-cap test ngay trong Phase 2b |
+| Prefill vượt physical memory cap | Cao | Hard-cap test ngay trong Phase 2b |
+| `target_budget` và `max_physical_budget` bị trộn nghĩa | Cao | Kiểm tra compatibility và raise lỗi cấu hình |
 | Attention weights `[B,H,L,L]` gây OOM | Cao | Đo peak và giới hạn capture ở Phase 2b/4 |
 | H2O pass nhưng VECTOR lệch contract | Cao | Chạy cùng bảng invariant cho cả hai |
 | Benchmark đẹp nhưng không tái lập được | Trung bình | Bắt buộc nonce, seed, hash và log nguyên văn |

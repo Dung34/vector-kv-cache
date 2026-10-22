@@ -30,6 +30,8 @@ class H2OKVCache(DynamicCache):
         min_recent_tokens: int = 32,         # minimum number of recent tokens to keep
         num_sink_tokens: int = 4,            # attention sink (initial tokens) to keep permanently
         max_budget: Optional[int] = None,    # optional hard cap on number of tokens
+        target_budget: Optional[int] = None,
+        max_physical_budget: Optional[int] = None,
     ):
         try:
             super().__init__()
@@ -42,8 +44,20 @@ class H2OKVCache(DynamicCache):
         self.recent_ratio = recent_ratio
         self.min_recent_tokens = min_recent_tokens
         self.num_sink_tokens = num_sink_tokens
-        self.max_budget = max_budget
-        self.active_budget: Optional[int] = max_budget
+        if target_budget is not None and max_budget is not None and target_budget != max_budget:
+            raise ValueError("target_budget and legacy max_budget must match when both are provided")
+        self.target_budget = target_budget if target_budget is not None else max_budget
+        self.max_budget = self.target_budget
+        self.max_physical_budget = max_physical_budget
+        if self.max_physical_budget is not None and self.max_physical_budget <= 0:
+            raise ValueError("max_physical_budget must be positive")
+        if (
+            self.target_budget is not None
+            and self.max_physical_budget is not None
+            and self.target_budget > self.max_physical_budget
+        ):
+            raise ValueError("target_budget cannot exceed max_physical_budget")
+        self.active_budget: Optional[int] = self.target_budget
         self.is_prefilling: bool = False
         self._seen_tokens: int = 0
 
@@ -141,6 +155,25 @@ class H2OKVCache(DynamicCache):
         if hasattr(self, "layers"):
             self.layers = []
 
+    def _apply_prefill_physical_cap(self, layer_idx: int):
+        if self.max_physical_budget is None:
+            return
+        physical_len = self._physical_len(layer_idx)
+        if physical_len <= self.max_physical_budget:
+            return
+        sink = min(self.num_sink_tokens, self.max_physical_budget)
+        keep_recent = min(physical_len, self.max_physical_budget - sink)
+        recent_start = physical_len - keep_recent
+        indices = torch.cat([
+            torch.arange(sink, device=self._key_cache[layer_idx].device),
+            torch.arange(recent_start, physical_len, device=self._key_cache[layer_idx].device),
+        ]).unique(sorted=True)
+        self._key_cache[layer_idx] = self._key_cache[layer_idx].index_select(-2, indices)
+        self._value_cache[layer_idx] = self._value_cache[layer_idx].index_select(-2, indices)
+        self._stored_positions[layer_idx] = self._stored_positions[layer_idx].index_select(-1, indices)
+        if self.accumulated_scores[layer_idx] is not None:
+            self.accumulated_scores[layer_idx] = self.accumulated_scores[layer_idx].index_select(-1, indices)
+
     def register_attention_scores(self, layer_idx: int, attn_scores: torch.Tensor):
         """
         Called by forward hook to accumulate attention weights into scores.
@@ -209,6 +242,9 @@ class H2OKVCache(DynamicCache):
                 self.accumulated_scores.append(
                     torch.zeros((batch_size, num_heads, incoming_len), device=key_states.device, dtype=torch.float32)
                 )
+            self._apply_prefill_physical_cap(layer_idx)
+            k_full = self._key_cache[layer_idx]
+            v_full = self._value_cache[layer_idx]
         else:
             if self._key_cache[layer_idx] is None:
                 k_full = key_states
@@ -248,6 +284,8 @@ class H2OKVCache(DynamicCache):
             else:
                 self.active_budget = int(self.budget_ratio * total_len)
             self.active_budget = max(self.active_budget, min(self.min_recent_tokens, total_len))
+            if self.max_physical_budget is not None:
+                self.active_budget = min(self.active_budget, self.max_physical_budget)
 
         target_budget = self.active_budget
 
@@ -255,6 +293,9 @@ class H2OKVCache(DynamicCache):
         if incoming_len > 1 or getattr(self, "is_prefilling", False) or total_len <= target_budget:
             self._key_cache[layer_idx] = k_full
             self._value_cache[layer_idx] = v_full
+            self._apply_prefill_physical_cap(layer_idx)
+            k_full = self._key_cache[layer_idx]
+            v_full = self._value_cache[layer_idx]
             self._sync_dynamic_layers(layer_idx, k_full, v_full)
             return k_full, v_full
 
