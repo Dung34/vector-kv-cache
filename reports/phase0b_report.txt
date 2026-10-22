@@ -1,0 +1,124 @@
+=== 1. KẾT LUẬN (tối đa 5 dòng) ===
+DONE
+Bản 5.20.1 tắt patch gây lỗi 32 vs 65 tại eager_attention_forward (C10, C11).
+Patch trong src/__init__.py cắt lát mask 4 lần qua hook eager attention (C2, C7).
+Thực nghiệm sau decode 1: layers[i].keys cùng data_ptr với _key_cache[i], two_copies=False (C5, C12).
+H2OKVCache đứng đầu MRO nên override get_seq_length gây sai position_id và mask (C4, C8, C12).
+
+=== 2. LỆNH ĐÃ CHẠY ===
+powershell -ExecutionPolicy Bypass -File experiments/run_exp.ps1 -Script experiments/phase0b_deep.py -Nonce 482061 -Tag phase0b_deep_v5 -Py .venv_v5\Scripts\python.exe -> exit=1
+powershell -ExecutionPolicy Bypass -File experiments/run_exp.ps1 -Script experiments/phase0b_deep.py -Nonce 482061 -Tag phase0b_deep_v4 -Py python -> exit=1
+powershell -Command "Set-Item -Path env:H2O_DISABLE_MASK_PATCH -Value '1'; .\experiments\run_exp.ps1 -Py .venv_v5\Scripts\python.exe -Script 'experiments\phase1_reproduce.py' -Nonce '482061' -Tag 'phase0b_v5_patch_off'; Remove-Item env:H2O_DISABLE_MASK_PATCH" -> exit=1
+powershell -Command "Set-Item -Path env:H2O_DISABLE_MASK_PATCH -Value '1'; .\experiments\run_exp.ps1 -Py python -Script 'experiments\phase1_reproduce.py' -Nonce '482061' -Tag 'phase0b_v4_patch_off'; Remove-Item env:H2O_DISABLE_MASK_PATCH" -> exit=1
+python experiments/verify_claims.py reports/phase0b_claims.tsv -> exit=0
+
+=== 3. BẢNG FILE ===
+Lệnh sinh bảng: python experiments/make_file_table.py
+Tag                    | Script                           | Log                            | SHA256 (head8...tail8)
+-------------------------------------------------------------------------------------------------------------------
+phase0b_deep_v5        | experiments/phase0b_deep.py      | logs/phase0b_deep_v5.log       | 309a25bd...33636ae2   
+phase0b_v5_patch_off   | experiments/phase1_reproduce.py  | logs/phase0b_v5_patch_off.log  | 545ab947...d14c9ced   
+phase0b_deep_v4        | experiments/phase0b_deep.py      | logs/phase0b_deep_v4.log       | 60b48a89...db66e294   
+phase0b_v4_patch_off   | experiments/phase1_reproduce.py  | logs/phase0b_v4_patch_off.log  | 58fa10d8...79a4b59c   
+
+=== 4. KẾT QUẢ SO SÁNH ===
+Lệnh sinh bảng: python experiments/make_comparison_table.py
+Env      | Patch | Step1_K | Step1_Mask | Step1_Verdict | Step2_Pos | Step2_Exp | Step2_Verdict
+-----------------------------------------------------------------------------------------------
+5.20.1   | ON    | 32      | 65         | PASS(SLICED)  | 32        | 65        | FAIL(I1)     
+5.20.1   | OFF   | 32      | 65         | CRASH(32!=65) | N/A       | N/A       | N/A          
+4.56.2   | ON    | 32      | 65         | PASS(SLICED)  | 32        | 65        | FAIL(I1)     
+4.56.2   | OFF   | 32      | 65         | PASS(SLICED)  | 32        | 65        | FAIL(I1)     
+
+=== 5. OUTPUT THÔ ===
+Log phase0b_deep_v5 (nonce=482061):
+   1| [HDR] nonce=482061
+   2| [HDR] time=2026-10-20T08:42:48.948616+00:00
+   3| [HDR] python=3.11.9
+   4| [HDR] torch=2.8.0+cpu
+   5| [HDR] transformers=5.20.1
+   6| [HDR] device=cpu
+   7| [HDR] seed=42
+   8| [HDR] script_sha256=5b33a60761c9bf822ca67dcc30a872164476afdc9379f3d309f49ce12510a238
+   9| [CFG] before_patch_fn=eager_attention_forward id=2330640845536
+  10| [CFG] after_patch_fn=patch_hf_eager_attention_for_pruned_cache.<locals>.make_patched.<locals>.patched_eager_attention_forward id=2330673989408
+  11| [CHECK] id=PATCH_HOOK expected=True actual=True verdict=PASS
+  12| [CFG] interface_fn=patch_hf_eager_attention_for_pruned_cache.<locals>.make_patched.<locals>.patched_eager_attention_forward id=2330673989408
+  13| [SRC] file=D:\MyProject\ProjectIII\src\baselines\h2o_cache.py line=77
+  14| [SRC]     def get_mask_sizes(
+  15| [SRC]         self,
+  16| [SRC]         cache_position: Any = None,
+  17| [SRC]         layer_idx: Optional[int] = None,
+  18| [SRC]     ) -> Tuple[int, int]:
+đã cắt dòng 19-69, xem file
+  70| [CFG] post_decode1_layer=0 keys_shape=(1, 2, 32, 16) key_cache_shape=(1, 2, 32, 16) same_data_ptr=True two_copies=False
+  71| [CHECK] id=POST_DEC1_PTR_L0 expected=True actual=True verdict=PASS
+  72| [CHECK] id=POST_DEC1_TWO_COPIES_L0 expected=False actual=False verdict=PASS
+  73| [CFG] post_decode1_layer=1 keys_shape=(1, 2, 32, 16) key_cache_shape=(1, 2, 32, 16) same_data_ptr=True two_copies=False
+  74| [CHECK] id=POST_DEC1_PTR_L1 expected=True actual=True verdict=PASS
+  75| [CHECK] id=POST_DEC1_TWO_COPIES_L1 expected=False actual=False verdict=PASS
+  76| [CFG] process_memory_rss_mb=417.91
+  77| [MASK] step=2 layer=0 shape=(1, 1, 1, 33) min=0.0 max=0.0
+  78| [MASK] step=2 layer=1 shape=(1, 1, 1, 33) min=0.0 max=0.0
+  79| [STEP] n=2 seen=65 past_seen=32 phys_len=32 mask_kv=33 pos_id=32 scores_len=32
+  80| [CFG] patch_slice_count=4
+  81| [CHECK] id=I1 expected=65 actual=32 verdict=FAIL
+  82| [CHECK] id=I2 expected=32 actual=33 verdict=FAIL
+  83| [CFG] formula_calc_prompt_len=3755
+  84| [CFG] formula_calc_active_budget=1877
+  85| [CFG] formula_calc_mask_kv_len=3756
+  86| [CHECK] id=FORMULA_BUDGET expected=1877 actual=1877 verdict=PASS
+  87| [CHECK] id=FORMULA_MASK expected=3756 actual=3756 verdict=PASS
+  88| [RESULT] FAIL reason=I1_violated_step2_posid_32_vs_65
+  89| [EXIT] code=1
+
+Log phase0b_v5_patch_off (nonce=482061):
+   9| === HEADER ===
+  10| nonce: 482061
+  11| timestamp: 2026-10-20T08:43:44.032198+00:00
+  12| python_version: 3.11.9
+  13| torch_version: 2.8.0+cpu
+  14| transformers_version: 5.20.1
+  15| mask_patch_status: DISABLED (H2O_DISABLE_MASK_PATCH=1)
+  16| device: cpu
+  17| seed: 42
+  18| script_path: D:\MyProject\ProjectIII\experiments\phase1_reproduce.py
+  19| script_sha256: 0e90037f1e8a3c7deb90e5c0d86c428c7e38308098c86fbad9a83072b993f947
+  20| ==============
+đã cắt dòng 21-94, xem file
+  95|   File "D:\MyProject\ProjectIII\.venv_v5\Lib\site-packages\transformers\models\qwen2\modeling_qwen2.py", line 157, in 
+  96| eager_attention_forward
+  97|     attn_weights = attn_weights + attention_mask
+  98|                    ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~
+  99| RuntimeError: The size of tensor a (32) must match the size of tensor b (65) at non-singleton dimension 3
+ 100| [EXIT] code=1
+
+Output thô verify_claims.py:
+C1 OK
+C2 OK
+C3 OK
+C4 OK
+C5 OK
+C6 OK
+C7 OK
+C8 OK
+C9 OK
+C10 OK
+C11 OK
+C12 OK
+C13 OK
+[CLAIMS] total=13 ok=13 mismatch=0
+
+=== 6. CHƯA LÀM / CHƯA KIỂM CHỨNG ===
+Chưa kiểm chứng giả thuyết prompt_len=3755 gây lỗi 1877 vs 3756 trên Kaggle cho đến khi có prompt_len thực tế (C9).
+Chưa sửa code thuật toán/cache trong src/ để giải quyết bất biến I1 và I2 (C13).
+Chưa kiểm tra hiệu năng (tốc độ và VRAM) của bản fix trên môi trường GPU (C13).
+
+=== 7. ĐIỀU BẤT NGỜ / TRÁI DỰ ĐOÁN ===
+Trước thực nghiệm tưởng bước 1 trên 5.20.1 luôn crash, nhưng thực tế chạy qua nhờ mask_patch ngầm (C2, C7, C11).
+Thực nghiệm sau decode 1 xác nhận layers[i].keys và _key_cache[i] cùng data_ptr, không bị giữ 2 bản bộ nhớ (C5, C12).
+
+=== 8. CẦN NGƯỜI DÙNG LÀM ===
+Duyệt báo cáo Phase 0b đã hiệu chỉnh để bắt đầu thực hiện Phase 2.
+Cung cấp prompt_len thực tế từ Kaggle để kiểm chứng giả thuyết lỗi 1877 vs 3756.
+Chạy lệnh kiểm tra độc lập: python experiments/verify_claims.py reports/phase0b_claims.tsv

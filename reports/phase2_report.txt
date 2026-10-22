@@ -1,0 +1,111 @@
+=== 1. KẾT LUẬN (tối đa 5 dòng) ===
+DONE
+Gỡ patch cắt mask: code cũ dính assert 65!=32 ngay bước decode 1 trên cả 5.20.1 và 4.56.2 (C2, C8).
+Thêm _seen_tokens và get_mask_sizes độc lập _physical_len: bản sửa PASS 20 bước decode (C4, C5, C9).
+Cột position_id tăng đơn điệu chuẩn xác từ 64 đến 83, bất biến I1 và I2 được bảo toàn (C5, C9).
+Kiểm tra đột biến: cố ý phá get_seq_length trả physical_len lập tức FAIL tại bước 2 (C7, C10).
+
+=== 2. LỆNH ĐÃ CHẠY ===
+powershell -ExecutionPolicy Bypass -File experiments/run_exp.ps1 -Script experiments/phase2_test.py -Nonce 482061 -Tag phase2_v5_old -Py .venv_v5\Scripts\python.exe -> exit=1
+powershell -ExecutionPolicy Bypass -File experiments/run_exp.ps1 -Script experiments/phase2_test.py -Nonce 482061 -Tag phase2_v4_old -Py python -> exit=1
+powershell -ExecutionPolicy Bypass -File experiments/run_exp.ps1 -Script experiments/phase2_test.py -Nonce 482061 -Tag phase2_v5_fixed -Py .venv_v5\Scripts\python.exe -> exit=0
+powershell -ExecutionPolicy Bypass -File experiments/run_exp.ps1 -Script experiments/phase2_test.py -Nonce 482061 -Tag phase2_v4_fixed -Py python -> exit=0
+powershell -ExecutionPolicy Bypass -File experiments/run_exp.ps1 -Script experiments/phase2_test.py -Nonce 482061 -Tag phase2_v5_mutation -Py .venv_v5\Scripts\python.exe -> exit=1
+python experiments/verify_claims.py reports/phase2_claims.tsv -> exit=0
+
+=== 3. BẢNG FILE ===
+Lệnh sinh bảng: python experiments/make_phase2_file_table.py
+Tag                    | Script                       | Log                          | SHA256 (head8...tail8)
+-------------------------------------------------------------------------------------------------------------
+phase2_v5_old          | experiments/phase2_test.py   | logs/phase2_v5_old.log       | 5cf420bc...23ccae58   
+phase2_v4_old          | experiments/phase2_test.py   | logs/phase2_v4_old.log       | 7bf4fd77...2ea60e27   
+phase2_v5_fixed        | experiments/phase2_test.py   | logs/phase2_v5_fixed.log     | bb8f39f5...0d2cb7ad   
+phase2_v4_fixed        | experiments/phase2_test.py   | logs/phase2_v4_fixed.log     | 25b9418d...f7ab8d6c   
+phase2_v5_mutation     | experiments/phase2_test.py   | logs/phase2_v5_mutation.log  | 8eb997df...6caa29ef   
+
+=== 4. KẾT QUẢ SO SÁNH ===
+Lệnh sinh bảng: python experiments/make_phase2_summary_table.py
+Env      | Code State                 | Overall          | Phys_K | Mask_KV | Assertion / I2           | I1 Pos_IDs        
+---------------------------------------------------------------------------------------------------------------------------
+5.20.1   | OLD (Unfixed)              | FAIL (Step 1)    | 32     | 65      | CRASH (Assert 65!=32)    | N/A               
+4.56.2   | OLD (Unfixed)              | FAIL (Step 1)    | 32     | 65      | CRASH (Assert 65!=32)    | N/A               
+5.20.1   | FIXED (Phase 2)            | PASS (20 Steps)  | 32     | 32      | PASS (All 20 steps)      | 64..83 (Monotonic)
+4.56.2   | FIXED (Phase 2)            | PASS (20 Steps)  | 32     | 32      | PASS (All 20 steps)      | 64..83 (Monotonic)
+5.20.1   | MUTATION (Break seq_len)   | FAIL (Step 2)    | 32     | 32      | FAIL (I1 pos_id 32!=65)  | 32 (Frozen)       
+
+=== 5. OUTPUT THÔ ===
+Log phase2_v5_old (nonce=482061):
+   9| [HDR] nonce=482061
+  10| [HDR] time=2026-10-20T08:52:56.614113+00:00
+  11| [HDR] python=3.11.9
+  12| [HDR] torch=2.8.0+cpu
+  13| [HDR] transformers=5.20.1
+  14| [HDR] device=cpu
+  15| [HDR] seed=42
+  16| [HDR] script_sha256=12b3316356af8130a962f27bcb054882b390eb0c9222160899de008a8edacd7a
+  17| [CFG] prompt_len=64 active_budget=32 expected_budget=32
+  18| [ERR] step=1 type=AssertionError msg=Attention mask KV length (65) does not match key length (32)
+  19| [RESULT] FAIL reason=exception_at_step_1
+  20| [EXIT] code=1
+
+Log phase2_v5_fixed (nonce=482061):
+   9| [HDR] nonce=482061
+  10| [HDR] time=2026-10-20T08:57:45.840109+00:00
+  11| [HDR] python=3.11.9
+  12| [HDR] torch=2.8.0+cpu
+  13| [HDR] transformers=5.20.1
+  14| [HDR] device=cpu
+  15| [HDR] seed=42
+  16| [HDR] script_sha256=12b3316356af8130a962f27bcb054882b390eb0c9222160899de008a8edacd7a
+  17| [CFG] prompt_len=64 active_budget=32 expected_budget=32
+  18| [STEP] n=1 seen=65 past_seen=64 phys_len=32 mask_kv=32 pos_id=64 scores_len=32
+  19| [CHECK] step=1 id=I1 expected=64 actual=64 verdict=PASS
+  20| [CHECK] step=1 id=I2 expected=32 actual=32 verdict=PASS
+đã cắt dòng 21-77, xem log
+  78| [CFG] position_id_seq=[64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83]
+  79| [RESULT] PASS reason=all_steps_verified
+  80| [EXIT] code=0
+
+Log phase2_v5_mutation (nonce=482061):
+   9| [HDR] nonce=482061
+  10| [HDR] time=2026-10-20T08:56:04.843474+00:00
+  11| [HDR] python=3.11.9
+  12| [HDR] torch=2.8.0+cpu
+  13| [HDR] transformers=5.20.1
+  14| [HDR] device=cpu
+  15| [HDR] seed=42
+  16| [HDR] script_sha256=12b3316356af8130a962f27bcb054882b390eb0c9222160899de008a8edacd7a
+  17| [CFG] prompt_len=64 active_budget=32 expected_budget=32
+  18| [STEP] n=1 seen=32 past_seen=64 phys_len=32 mask_kv=32 pos_id=64 scores_len=32
+  19| [CHECK] step=1 id=I1 expected=64 actual=64 verdict=PASS
+  20| [CHECK] step=1 id=I2 expected=32 actual=32 verdict=PASS
+  21| [STEP] n=2 seen=32 past_seen=32 phys_len=32 mask_kv=32 pos_id=32 scores_len=32
+  22| [CHECK] step=2 id=I1 expected=65 actual=32 verdict=FAIL
+  23| [CHECK] step=2 id=I2 expected=32 actual=32 verdict=PASS
+  24| [RESULT] FAIL reason=invariant_violated_at_step_2
+  25| [EXIT] code=1
+
+Output thô verify_claims.py:
+C1 OK
+C2 OK
+C3 OK
+C4 OK
+C5 OK
+C6 OK
+C7 OK
+C8 OK
+C9 OK
+C10 OK
+C11 OK
+[CLAIMS] total=11 ok=11 mismatch=0
+
+=== 6. CHƯA LÀM / CHƯA KIỂM CHỨNG ===
+Chưa áp dụng fix sang VectorKVCache cho đến khi người dùng duyệt kết quả H2OKVCache (C11).
+Chưa cập nhật test_mask_patch.py vì test này vẫn kiểm tra hành vi cũ cắt lát mask (C11).
+
+=== 7. ĐIỀU BẤT NGỜ / TRÁI DỰ ĐOÁN ===
+Đột biến get_seq_length trả physical_len pass bước 1 do cache_position lấy từ prefill, nhưng crash ở bước 2 (C7, C10).
+
+=== 8. CẦN NGƯỜI DÙNG LÀM ===
+Duyệt kết quả Phase 2 cho H2OKVCache để tiến hành đồng bộ sang VectorKVCache.
+Chạy lệnh kiểm tra độc lập: python experiments/verify_claims.py reports/phase2_claims.tsv

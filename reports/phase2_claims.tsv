@@ -1,0 +1,11 @@
+C1	QUAN_SAT	logs/phase2_v5_old.numbered.txt	9	16	[HDR] nonce=482061
+C2	QUAN_SAT	logs/phase2_v5_old.numbered.txt	18	20	[ERR] step=1 type=AssertionError msg=Attention mask KV length (65) does not match key length (32)
+C3	QUAN_SAT	logs/phase2_v5_fixed.numbered.txt	9	16	[HDR] nonce=482061
+C4	QUAN_SAT	logs/phase2_v5_fixed.numbered.txt	18	20	[STEP] n=1 seen=65 past_seen=64 phys_len=32 mask_kv=32 pos_id=64 scores_len=32
+C5	QUAN_SAT	logs/phase2_v5_fixed.numbered.txt	78	80	[CFG] position_id_seq=[64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83]
+C6	QUAN_SAT	logs/phase2_v5_mutation.numbered.txt	9	16	[HDR] nonce=482061
+C7	QUAN_SAT	logs/phase2_v5_mutation.numbered.txt	21	25	[CHECK] step=2 id=I1 expected=65 actual=32 verdict=FAIL
+C8	SUY_LUAN	C1,C2			Khi go mask patch code cu FAIL voi AssertionError 65 vs 32 tai buoc decode 1
+C9	SUY_LUAN	C3,C4,C5			Ban sua PASS qua 20 buoc decode bat bien I1 va I2 duoc duy tri lien tuc
+C10	SUY_LUAN	C6,C7			Dot bien get_seq_length tra physical_len bi test bat ngay o buoc 2 voi verdict FAIL
+C11	CHUA_KIEM_CHUNG	python -m unittest discover tests/			Ap dung fix tuong tu cho VectorKVCache sau khi nguoi dung duyet H2OKVCache

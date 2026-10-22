@@ -1,0 +1,13 @@
+C1	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	1	8	[HDR] nonce=482061
+C2	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	9	12	[CHECK] id=PATCH_HOOK expected=True actual=True verdict=PASS
+C3	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	13	54	[SRC]     def get_mask_sizes(
+C4	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	55	58	[CFG] mro=[0] src.baselines.h2o_cache.H2OKVCache
+C5	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	70	75	[CHECK] id=POST_DEC1_TWO_COPIES_L0 expected=False actual=False verdict=PASS
+C6	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	69	69	[STEP] n=1 seen=64 past_seen=64 phys_len=32 mask_kv=65 pos_id=64 scores_len=32
+C7	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	80	80	[CFG] patch_slice_count=4
+C8	QUAN_SAT	logs/phase0b_deep_v5.numbered.txt	81	82	[CHECK] id=I1 expected=65 actual=32 verdict=FAIL
+C9	CHUA_KIEM_CHUNG	python experiments/verify_kaggle_prompt.py --prompt_len <PROMPT_LEN>			Gia thuyet prompt_len=3755 can xac nhan khi nguoi dung dua prompt_len tu Kaggle
+C10	QUAN_SAT	logs/phase0b_v5_patch_off.numbered.txt	95	100	RuntimeError: The size of tensor a (32) must match the size of tensor b (65) at non-singleton dimension 3
+C11	SUY_LUAN	C2,C7,C10			Khi khong co patch tren 5.20.1 attention crash do 32 vs 65 khi co patch thi vuot qua buoc 1
+C12	SUY_LUAN	C4,C5			DynamicLayer keys va H2OKVCache _key_cache cung data_ptr khong ton tai 2 ban copy bo nho; H2OKVCache dung dau MRO nen override get_seq_length
+C13	CHUA_KIEM_CHUNG	python -m pytest tests/test_h2o_cache.py			Chay toan bo suite test sau khi hoan tat sua code o Phase 2

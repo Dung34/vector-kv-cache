@@ -1,0 +1,20 @@
+# DỰ ĐOÁN THỰC NGHIỆM 2x2: {4.56.2, 5.20.1} x {patch BẬT, patch TẮT}
+# Nonce: 1002
+# Ngày ghi: 2026-10-20
+
+DỰ ĐOÁN 1 (4.56.2 + patch BẬT):
+In bảng decode bước 1 & 2. Dừng ở bước 2 raise AssertionError: BAT BIEN I1 BI VI PHAM: expected=65 actual=32.
+
+DỰ ĐOÁN 2 (4.56.2 + patch TẮT):
+In bảng decode bước 1 & 2. Dừng ở bước 2 raise AssertionError: BAT BIEN I1 BI VI PHAM: expected=65 actual=32.
+Lý do: transformers==4.56.2 có sẵn logic cắt lát mask ở dòng 111 của eager_attention_forward nên dù tắt mask_patch của ta, attention vẫn nhận mask đã bị cắt lát.
+
+DỰ ĐOÁN 3 (5.20.1 + patch BẬT):
+In bảng decode bước 1 & 2. Dừng ở bước 2 raise AssertionError: BAT BIEN I1 BI VI PHAM: expected=65 actual=32.
+Lý do: mask_patch của ta can thiệp cắt lát mask xuống kv_len=32 nên vượt qua được bước decode 1.
+
+DỰ ĐOÁN 4 (5.20.1 + patch TẮT):
+Raise RuntimeError ngay tại bước decode 1 với thông báo:
+"The size of tensor a (32) must match the size of tensor b (65) at non-singleton dimension 3"
+Không in được bảng đầy đủ của bước 1 & 2.
+Lý do: transformers==5.20.1 nguyên bản không có logic cắt lát mask trong eager_attention_forward; khi tắt mask_patch, phép cộng attn_weights (32) + attention_mask (65) gây lỗi dimension mismatch.

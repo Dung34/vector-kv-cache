@@ -1,0 +1,1 @@
+H: trên 5.20.1 bước decode 1 raise RuntimeError mask 65 vs K 32
