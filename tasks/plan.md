@@ -59,26 +59,28 @@ Quy tắc sử dụng:
 
 **Checkpoint:** đã đạt; log: `logs/phase0_current_head.log`.
 
-## Phase 1 — Tạo test tái hiện và sửa contract mask
+## Phase 1 — Tạo test tái hiện và sửa contract mask — COMPLETED
 
 **Mục tiêu:** biến lỗi shape thành test regression phản ánh đúng invariant, không dùng workaround để che lỗi.
 
 **Công việc:**
 
-- [ ] Tạo test model nhỏ tái hiện mismatch giữa mask và K sau prune.
-- [ ] Chạy test trên code hiện tại và lưu log FAIL.
-- [ ] Quyết định `mask_patch` chỉ là guard/diagnostic; logic chiều dài phải nằm ở cache/model contract.
-- [ ] Sửa test `mask_patch` để phân biệt case hợp lệ và mismatch thật.
-- [ ] Kiểm tra mask dài hơn, bằng và ngắn hơn K.
+- [x] Tạo test tái hiện mismatch giữa mask và K sau prune.
+- [x] Chạy test trên code hiện tại và lưu log FAIL.
+- [x] Quyết định `mask_patch` chỉ là guard/diagnostic; logic chiều dài phải nằm ở cache/model contract.
+- [x] Sửa test `mask_patch` để phân biệt case hợp lệ và mismatch thật.
+- [x] Kiểm tra mask lệch và mask đã căn chỉnh.
 
 **Acceptance criteria:**
 
-- [ ] Code cũ FAIL đúng invariant.
-- [ ] Code sửa PASS.
-- [ ] Mutation làm mask length sai phải FAIL.
-- [ ] Không dùng `assert` để âm thầm xử lý input runtime production.
+- [x] Code/test contract cũ FAIL đúng invariant.
+- [x] Code/test contract mới PASS.
+- [x] Mutation làm mask length sai phải FAIL.
+- [x] Guard không tự slice/pad mask để che mismatch.
 
 **Dependencies:** Phase 0.
+
+**Evidence:** `logs/phase1_mask_green.log`, `logs/phase1_mask_mutation.log`, `logs/phase1_full_pytest.log`.
 
 ## Phase 2 — Hoàn thiện logical/physical length cho H2O và VECTOR
 
@@ -196,6 +198,6 @@ Mỗi phase chỉ commit sau khi verification tương ứng hoàn tất:
 
 ## Trạng thái dừng hiện tại
 
-**Đang ở Phase 1 — tạo test tái hiện và sửa contract mask.**
+**Đang ở Phase 2 — hoàn thiện logical/physical length cho H2O và VECTOR.**
 
-Phase 0 đã xác nhận decode hiện tại có `position_id=64` và mask length 32 khớp physical K length 32 ở cả hai layer. Phase 0 cũng xác nhận prefill vẫn lưu 64 token dù `active_budget=32`; đây là blocker memory cần xử lý ở Phase 2b.
+Phase 0 đã xác nhận decode hiện tại có `position_id=64` và mask length 32 khớp physical K length 32 ở cả hai layer. Phase 1 đã chuẩn hóa test contract mask và full suite pass 33 test. Phase 0 cũng xác nhận prefill vẫn lưu 64 token dù `active_budget=32`; đây là blocker memory cần xử lý ở Phase 2b.
