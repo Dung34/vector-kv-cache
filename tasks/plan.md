@@ -1,63 +1,201 @@
-# Kế Hoạch Đánh Giá & Tái Cấu Trúc Đồ Án VECTOR KV Cache (Project III)
+# Roadmap: Ổn định H2O/VECTOR KV Cache
 
-## 1. Tổng Quan (Overview)
-Đề tài: **"Nghiên cứu và Hiện thực Phương pháp Nén KV Cache Bất đối xứng Dựa trên Tính Cộng tuyến K–V cho Mô hình Ngôn ngữ Nhỏ (SLMs)"**.
-Mục tiêu của kế hoạch này là rà soát toàn diện từ đặc tả kỹ thuật (Specification), kiến trúc mã nguồn hiện tại (`src/`), kết quả thực nghiệm sơ bộ (`reports/`), chỉ ra nguyên nhân gốc rễ của các lỗi hiện tại (Throughput thấp 3.9 tokens/s, NIAH thất bại), và tái cấu trúc hệ thống đạt đúng các tiêu chuẩn khoa học và kỹ thuật.
+## Mục tiêu
 
----
+Đưa H2O và VECTOR từ trạng thái prototype có test đơn vị sang trạng thái có thể chạy decode ổn định trên Qwen2, giữ đúng vị trí tuyệt đối của token, không lệch attention mask, không vượt giới hạn bộ nhớ đã cấu hình, và có benchmark đáng tin cậy.
 
-## 2. Đánh Giá Hiện Trạng: Hướng Đi Có Quá Đơn Giản, Quá Phức Tạp Hay Đúng Đắn?
+Phạm vi ưu tiên hiện tại là correctness và memory safety. Benchmark chất lượng, throughput và NIAH chỉ được thực hiện sau khi các invariant lõi đã pass.
 
-### 2.1. Về tính đúng đắn (Methodological & Theoretical Soundness): **RẤT ĐÚNG ĐẮN VỀ Ý TƯỞNG, NHƯNG LỖI NGHIÊM TRỌNG Ở KHÂU HIỆN THỰC**
-- **Điểm mạnh (Lý thuyết chuẩn xác):**
-  - Khái niệm **Asymmetric Sensitivity** (Key nằm trong Softmax nhạy cảm hơn Value) và **K-V Collinearity** ($V \approx W_{\text{OLS}} K$) là nền tảng khoa học vững chắc từ các nghiên cứu hàng đầu năm 2024.
-  - Cơ chế **Budget Swap** ($N_K + N_R = 2 \times \text{target\_budget}$) đã được chứng minh và pass unit test về mặt bảo toàn dung lượng phần tử bộ nhớ.
-  - Tính chất Training-Free (chỉ cần Offline OLS Calibration 1 lần trên C4/Wikitext) rất phù hợp với phần cứng sinh viên và khuôn khổ Project III.
-- **Tử huyệt ở khâu hiện thực (Root Causes of Failures):**
-  1. **Thiếu Attention Sink (Sink Tokens):** Cả H2O baseline và VECTOR hiện tại chỉ giữ lại `recent_tokens` mà KHÔNG khóa cố định 4–32 tokens đầu tiên (`initial_tokens`). Trong kiến trúc Transformer giải mã, Softmax bắt buộc dồn phân phối chú ý vào các token đầu tiên (StreamingLLM / H2O paper). Khi thiếu sink tokens, phân phối chú ý bị vỡ, dẫn tới hiện tượng mô hình sinh ra chuỗi ký tự rác và trượt 100% bài kiểm tra NIAH.
-  2. **Nghẽn cổ chai Throughput (3.9 tokens/s thay vì 35-50 tokens/s):**
-     - Tại mỗi decode step, mã nguồn gọi lại hàm `_compute_reconstruction_error` tính lại sai số $\epsilon_i$ cho hàng trăm candidate tokens. Trong khi đó, vector $K_i, V_i$ của token quá khứ là bất biến, $\epsilon_i$ chỉ cần tính 1 lần duy nhất!
-     - Mã nguồn dùng vòng lặp Python lồng nhau (`for b in range... for h in range...`) và gọi `torch.nonzero()`, gây 56 lần đồng bộ CPU-GPU (host-device synchronization) ở mỗi token sinh ra qua 28 layers!
-  3. **Nguy cơ OOM khi dùng `output_attentions=True`:**
-     - Module `VectorAttentionHookManager` bật cờ `output_attentions=True` trên Hugging Face. Ở ngữ cảnh 8K–16K, ma trận attention kích thước $[B, H, L, L]$ sẽ ngốn từ 3GB đến 14GB VRAM chỉ riêng cho activation attention weights, làm mất đi hoàn toàn ý nghĩa của việc nén KV Cache!
+## Trạng thái hiện tại
 
-### 2.2. Về độ phức tạp (Complexity Balance):
-- **Không quá đơn giản:** Dự án chạm đến các tầng sâu của Transformer (RoPE decoupling, GQA attention hook, custom dynamic cache kế thừa Hugging Face `DynamicCache`, OLS covariance accumulation).
-- **Vừa over-engineered vừa under-engineered ở từng phần:**
-  - *Over-engineered:* Tái phân vùng 3 trạng thái và tính lại sai số OLS liên tục ở mọi token decode.
-  - *Under-engineered:* Bỏ qua attention sinks, bỏ qua caching sai số $\epsilon_i$, hook attention phụ thuộc hoàn toàn vào cơ chế eager attention của Hugging Face mà chưa có cơ chế fallback nhẹ nhàng.
+- [x] Đã ghi nhận và lưu các experiment/report Phase 0b và Phase 2.
+- [x] H2O đã có phân biệt sơ bộ giữa `seen_tokens` và physical cache length.
+- [ ] VECTOR chưa được kiểm chứng đầy đủ theo cùng contract logical/physical length.
+- [ ] Test suite hiện chưa xanh: test mask patch đang fail.
+- [ ] `max_budget` chưa bảo vệ peak memory của prefill đầu tiên.
+- [ ] Chưa có bằng chứng Phase 3 đầy đủ cho cả H2O và VECTOR trên model Qwen2 nhỏ.
+- [ ] Chưa được phép chạy benchmark 4096 token như tiêu chí nghiệm thu cuối.
 
----
+Bằng chứng hiện tại:
 
-## 3. Kế Hoạch Triển Khai Nhiệm Vụ (Task List)
+- `logs/review_20261022_pytest.log`: 28 test pass, 1 test fail.
+- `logs/phase_review_memory.log`: prefill 64 token vẫn lưu physical length 64 với `max_budget=16` ở cả H2O và VECTOR.
+- `tasks/fixh2ovector.md`: đặc tả invariant I1–I6 và thứ tự điều tra/sửa.
 
-### Giai đoạn 1: Sửa Lỗi Tử Huyệt Thuật Toán & Ổn Định Suy Luận (Fix Sinks & Throughput)
-- [x] **Task 1.1: Bổ sung Cơ Chế Attention Sink (Initial Tokens) cho Baseline H2O và VECTOR**
-  - Lưu giữ cố định `num_sink_tokens` (mặc định 4 hoặc 8 tokens) không bao giờ bị evict.
-  - Kiểm chứng: Perplexity phục hồi, không còn sinh ký tự vô nghĩa khi nén.
-- [x] **Task 1.3: Tối Ưu Hóa Pruning Buffer (Pre-allocated Index Buffers & Redundant Sort/Arange Elimination)**
-  - Tái sử dụng index buffer cố định cho sink tokens và recent tokens, loại bỏ `torch.arange` và `torch.sort` toàn mảng lặp lại ở từng decode step.
-  - Kiểm chứng: Giảm thiểu kernel launch latency, tăng tốc độ xử lý ở tỷ lệ nén cao (85%).
-- [x] **Task 1.4: Chuẩn Hóa Phép Đo Đối Chuẩn (Tách Biệt Prefill $T_{\text{prefill}}$ và Decode $T_{\text{decode}}$)**
-  - Tách hàm benchmark thành 2 pha độc lập: Prompt Prefill (Time-To-First-Token, ms) và Token-by-Token Decode (Throughput tok/s thuần túy & Inter-Token Latency ms/tok).
-  - Cập nhật notebook `kaggle_baseline_full_h2o_v2.ipynb` và các báo cáo tự động.
-  - Kiểm chứng: Số liệu khoa học minh bạch, tách bạch chi phí Prefill khỏi Decode.
+## Hợp đồng dữ liệu bắt buộc
 
-### Giai đoạn 2: Tái Đánh Giá Thực Nghiệm Cốt Lõi (VECTOR vs Baselines)
-- [x] **Task 2.1: Chuẩn Hóa và Nâng Cấp Notebook VECTOR Kaggle lên Phiên Bản v2.0**
-  - Xây dựng `kaggle_phase7_8_vector_cache_v2.ipynb` tích hợp đầy đủ 3 bài kiểm thử:
-    1. Đo đạc tài nguyên tách biệt Prefill (ms) & Decode (tok/s) @ 4096 tokens.
-    2. Single-Needle NIAH @ 4096 tokens với Chat Template chuẩn hóa (vùng giữa 50% độ sâu).
-    3. Multi-Needle NIAH (3 & 5 needles @ 4096 tokens) đối chứng trực tiếp với H2O và Full FP16.
-  - Tự động hóa xuất báo cáo Markdown v2.0 với đầy đủ bảng biểu học thuật.
-- [ ] **Task 2.2: Tái Đánh Giá Thực Nghiệm trên Kaggle GPU T4**
-  - Thực thi đối chuẩn 3 bên Full-FP16 vs H2O vs VECTOR tại các tỷ lệ nén $50\%, 75\%$.
-  - Xác nhận VECTOR phục hồi Recall đa kim từ $0.0\%$ (H2O) lên $\ge 80\text{--}100\%$ nhờ cơ chế Budget Swap.
-- [ ] **Task 2.3: Tối ưu Hóa Attention Capture Hook (Giảm Peak Memory Prefill)**
-  - Thiết kế cơ chế hook streaming / sliding hoặc hạn chế ma trận 4D attention trong prefill để giảm thiểu Peak VRAM.
+Mọi cache phải phân biệt rõ ba đại lượng:
 
-### Giai đoạn 3: Hoàn Thiện Thực Nghiệm Mở Rộng & Đóng Gói (Evaluation & Deliverables)
-- [ ] **Task 3.1: Benchmark Multi-Needle NIAH & Memory Footprint**
-  - Đánh giá khả năng truy xuất đa kim (3-5 needles) để chứng minh giá trị của Budget Swap.
-- [ ] **Task 3.2: Đóng gói Báo cáo và Soạn thảo Đồ án**
-  - Cập nhật số liệu thực nghiệm chuẩn xác vào báo cáo Project III.
+1. `seen_tokens`: tổng số token tuyệt đối đã xử lý; chỉ tăng, không giảm.
+2. `physical_len`: số token K/V thực sự đang được lưu sau prune.
+3. `mask_kv_len`: chiều dài KV mà causal attention mask sử dụng.
+
+Quy tắc sử dụng:
+
+- `seen_tokens` dùng cho `cache_position`, `position_ids` và RoPE.
+- `physical_len` dùng cho shape K/V thật và memory accounting.
+- `mask_kv_len` phải khớp K sau `cache.update()` ở mọi layer.
+- `accumulated_scores`, `_cached_eps` và position metadata phải được prune/gather cùng selected indices.
+- Nếu `max_budget` được cấu hình, `physical_len` không được vượt hard cap sau bất kỳ lần update nào, bao gồm prefill.
+
+## Phase 0 — Xác nhận baseline trên HEAD hiện tại — COMPLETED
+
+**Mục tiêu:** xác nhận behavior của đúng phiên bản code đang chuẩn bị sửa.
+
+**Công việc:**
+
+- [x] Chạy inspect source của `Qwen2Model.forward`, `DynamicCache.get_seq_length` và `get_mask_sizes`.
+- [x] Ghi phiên bản Python, PyTorch, Transformers, device và seed.
+- [x] Chạy Qwen2 config nhỏ: 2 layer, hidden size 64, 4 attention heads, 2 KV heads, context 64.
+- [x] Ghi theo từng layer: `seen_tokens`, `physical_len`, `mask_kv_len`, `position_id`, `scores_len`.
+- [x] Xác định chính xác mask được tạo trước hay sau `cache.update()`.
+
+**Acceptance criteria:**
+
+- [x] Có một log Phase 0 mới, chạy bằng script có nonce.
+- [x] Trả lời được mask length lấy từ API nào.
+- [x] Trả lời được position ID lấy từ API nào.
+- [x] Không thay đổi production code trong phase này.
+
+**Checkpoint:** đã đạt; log: `logs/phase0_current_head.log`.
+
+## Phase 1 — Tạo test tái hiện và sửa contract mask
+
+**Mục tiêu:** biến lỗi shape thành test regression phản ánh đúng invariant, không dùng workaround để che lỗi.
+
+**Công việc:**
+
+- [ ] Tạo test model nhỏ tái hiện mismatch giữa mask và K sau prune.
+- [ ] Chạy test trên code hiện tại và lưu log FAIL.
+- [ ] Quyết định `mask_patch` chỉ là guard/diagnostic; logic chiều dài phải nằm ở cache/model contract.
+- [ ] Sửa test `mask_patch` để phân biệt case hợp lệ và mismatch thật.
+- [ ] Kiểm tra mask dài hơn, bằng và ngắn hơn K.
+
+**Acceptance criteria:**
+
+- [ ] Code cũ FAIL đúng invariant.
+- [ ] Code sửa PASS.
+- [ ] Mutation làm mask length sai phải FAIL.
+- [ ] Không dùng `assert` để âm thầm xử lý input runtime production.
+
+**Dependencies:** Phase 0.
+
+## Phase 2 — Hoàn thiện logical/physical length cho H2O và VECTOR
+
+**Mục tiêu:** áp dụng cùng một contract cho hai cache.
+
+**Công việc:**
+
+- [ ] Hoàn thiện `seen_tokens` trong H2O.
+- [ ] Implement và kiểm thử cùng contract trong VECTOR.
+- [ ] Bảo đảm `get_seq_length()` trả logical length.
+- [ ] Bảo đảm `get_mask_sizes()` dùng physical length và query length thực tế.
+- [ ] Kiểm tra mọi layer có cùng physical K length.
+- [ ] Kiểm tra RoPE không bị re-rotate sau prune.
+
+**Acceptance criteria:**
+
+- [ ] I1: position ID token mới bằng `seen_tokens` trước bước decode.
+- [ ] I2: mask KV length bằng K length sau update.
+- [ ] I3: mọi layer có cùng K length.
+- [ ] I4: scores length bằng K length trước/sau hook và prune.
+- [ ] I5: K giữ RoPE theo vị trí gốc.
+
+**Dependencies:** Phase 1.
+
+## Phase 2b — Bảo vệ memory budget và peak memory
+
+**Mục tiêu:** biến `max_budget` thành hard cap thực sự và loại bỏ tăng trưởng bộ nhớ ngoài dự kiến.
+
+**Công việc:**
+
+- [ ] Áp dụng budget ngay ở prefill đầu tiên.
+- [ ] Kiểm tra prefill một chunk và nhiều chunk với `incoming_len > 1`.
+- [ ] Đo persistent KV bytes và auxiliary bytes riêng biệt.
+- [ ] Đo peak temporary memory trong `torch.cat`, partition và reconstruction.
+- [ ] Prune đồng bộ K, V, positions, scores và reconstruction errors.
+- [ ] Kiểm tra không giữ các tensor lớn cũ sau khi thay cache.
+
+**Acceptance criteria:**
+
+- [ ] Với mọi bước update, `physical_len <= max_budget`.
+- [ ] H2O và VECTOR đều bounded sau prefill và decode.
+- [ ] Không cần dùng `empty_cache()` để làm cho invariant có vẻ đúng.
+- [ ] Có log chứa memory table được tính từ tensor thật.
+
+**Dependencies:** Phase 2.
+
+## Phase 3 — Nghiệm thu model Qwen2 nhỏ
+
+**Mục tiêu:** xác nhận toàn bộ invariant trong flow model thật nhưng nhỏ, chạy CPU.
+
+**Công việc:**
+
+- [ ] Chạy H2O ít nhất 20 bước decode.
+- [ ] Chạy VECTOR ít nhất 20 bước decode.
+- [ ] Kiểm tra I1–I5 ở mọi bước.
+- [ ] Kiểm tra I6: `compression_ratio=0` cho output greedy giống Full-FP16.
+- [ ] Ghi bảng `step | seen_tokens | physical_len | mask_kv_len | position_id | scores_len`.
+- [ ] Kiểm tra NaN, exception và memory bound.
+
+**Acceptance criteria:**
+
+- [ ] Tất cả I1–I6 pass cho H2O.
+- [ ] Tất cả I1–I6 pass cho VECTOR.
+- [ ] Không có mismatch mask/K.
+- [ ] Không có output bất thường so với Full-FP16 ở chế độ không nén.
+
+**Dependencies:** Phase 2b.
+
+**Checkpoint:** nếu Phase 3 chưa pass, không chạy benchmark 4096 token.
+
+## Phase 4 — Benchmark thật và đánh giá chất lượng
+
+**Mục tiêu:** đo đúng trade-off memory, latency và chất lượng sau khi correctness đã ổn định.
+
+**Công việc:**
+
+- [ ] Benchmark Full FP16, H2O và VECTOR.
+- [ ] Đo riêng prefill latency, decode throughput và inter-token latency.
+- [ ] Đo peak allocated/reserved VRAM và persistent KV bytes.
+- [ ] Chạy single-needle và multi-needle NIAH.
+- [ ] So sánh output token đầu với Full-FP16.
+- [ ] Lưu JSON, bảng Markdown và log đầy đủ nonce/exit code/hash.
+
+**Acceptance criteria:**
+
+- [ ] Báo cáo có context length, compression ratio, device và seed.
+- [ ] Không dùng số liệu từ run chưa có log.
+- [ ] Báo cáo tách rõ kết quả đo được và suy luận.
+- [ ] Có kết luận riêng cho memory, throughput và recall.
+
+**Dependencies:** Phase 3.
+
+## Quy tắc commit
+
+Mỗi phase chỉ commit sau khi verification tương ứng hoàn tất:
+
+1. `test: add current-head cache diagnostics`
+2. `test: add logical-physical cache invariants`
+3. `fix: unify seen and physical cache lengths`
+4. `fix: enforce hard memory budget during prefill`
+5. `fix: align pruned attention mask contract`
+6. `test: validate H2O and VECTOR on small Qwen2`
+7. `benchmark: compare bounded-memory cache variants`
+
+## Rủi ro và cách giảm thiểu
+
+| Rủi ro | Mức độ | Cách xử lý |
+|---|---:|---|
+| Mask được tính trước `cache.update()` | Cao | Xác minh bằng hook/source inspection ở Phase 0 |
+| `seen_tokens` bị thay bằng physical length | Cao | I1 và mutation test |
+| Prefill vượt `max_budget` | Cao | Hard-cap test ngay trong Phase 2b |
+| Attention weights `[B,H,L,L]` gây OOM | Cao | Đo peak và giới hạn capture ở Phase 2b/4 |
+| H2O pass nhưng VECTOR lệch contract | Cao | Chạy cùng bảng invariant cho cả hai |
+| Benchmark đẹp nhưng không tái lập được | Trung bình | Bắt buộc nonce, seed, hash và log nguyên văn |
+
+## Trạng thái dừng hiện tại
+
+**Đang ở Phase 1 — tạo test tái hiện và sửa contract mask.**
+
+Phase 0 đã xác nhận decode hiện tại có `position_id=64` và mask length 32 khớp physical K length 32 ở cả hai layer. Phase 0 cũng xác nhận prefill vẫn lưu 64 token dù `active_budget=32`; đây là blocker memory cần xử lý ở Phase 2b.
