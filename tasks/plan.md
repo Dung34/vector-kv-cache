@@ -121,7 +121,7 @@ Quy tắc sử dụng:
 - [x] Áp dụng `max_physical_budget` ngay ở prefill đầu tiên.
 - [x] Kiểm tra prefill một chunk và nhiều chunk với `incoming_len > 1`.
 - [x] Đo persistent KV bytes và auxiliary bytes riêng biệt.
-- [ ] Đo peak temporary memory trong `torch.cat`, partition và reconstruction.
+- [x] Đo allocation/temporary memory trong `torch.cat`, partition và reconstruction bằng CPU profiler; peak allocator tuyệt đối vẫn cần instrumentation riêng.
 - [ ] Prune đồng bộ K, V, positions, scores và reconstruction errors.
 - [ ] Kiểm tra không giữ các tensor lớn cũ sau khi thay cache.
 
