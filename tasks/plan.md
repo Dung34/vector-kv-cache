@@ -122,7 +122,7 @@ Quy tắc sử dụng:
 - [x] Kiểm tra prefill một chunk và nhiều chunk với `incoming_len > 1`.
 - [x] Đo persistent KV bytes và auxiliary bytes riêng biệt.
 - [x] Đo allocation/temporary memory trong `torch.cat`, partition và reconstruction bằng CPU profiler; peak allocator tuyệt đối vẫn cần instrumentation riêng.
-- [ ] Prune đồng bộ K, V, positions, scores và reconstruction errors.
+- [x] Prune đồng bộ K, V, positions, scores và reconstruction errors.
 - [ ] Kiểm tra không giữ các tensor lớn cũ sau khi thay cache.
 
 **Acceptance criteria:**
@@ -131,7 +131,7 @@ Quy tắc sử dụng:
 - [x] Cấu hình hợp lệ `target_budget=32, max_physical_budget=64` giữ được Budget Swap.
 - [x] Cấu hình xung đột `target_budget=32, max_physical_budget=32` bị từ chối rõ ràng.
 - [x] H2O và VECTOR đều bounded sau prefill và decode.
-- [ ] Không cần dùng `empty_cache()` để làm cho invariant có vẻ đúng.
+- [x] Không cần dùng `empty_cache()` để làm cho invariant có vẻ đúng.
 - [x] Có log chứa memory table được tính từ tensor thật.
 
 **Dependencies:** Phase 2.

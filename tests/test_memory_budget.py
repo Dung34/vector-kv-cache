@@ -7,6 +7,18 @@ from src.vector_cache.vector_cache import VectorKVCache
 
 
 class TestMemoryBudget(unittest.TestCase):
+    def test_h2o_prune_keeps_scores_aligned_without_empty_cache(self):
+        original_empty_cache = torch.cuda.empty_cache
+        torch.cuda.empty_cache = lambda: (_ for _ in ()).throw(AssertionError("empty_cache is not part of cache update"))
+        try:
+            cache = H2OKVCache(target_budget=16, max_physical_budget=16, min_recent_tokens=4)
+            prefill = torch.randn(1, 2, 32, 4)
+            cache.update(prefill, prefill, layer_idx=0)
+            cache.update(torch.randn(1, 2, 1, 4), torch.randn(1, 2, 1, 4), layer_idx=0)
+            self.assertEqual(cache.accumulated_scores[0].shape[-1], cache._physical_len(0))
+        finally:
+            torch.cuda.empty_cache = original_empty_cache
+
     def test_h2o_caps_prefill_physical_length(self):
         cache = H2OKVCache(
             compression_ratio=0.5,
@@ -55,6 +67,32 @@ class TestMemoryBudget(unittest.TestCase):
         cache.update(chunk, chunk, layer_idx=0)
         cache.update(chunk, chunk, layer_idx=0)
         self.assertLessEqual(cache._physical_len(0), 32)
+
+    def test_vector_prune_keeps_auxiliary_state_aligned_without_empty_cache(self):
+        original_empty_cache = torch.cuda.empty_cache
+        torch.cuda.empty_cache = lambda: (_ for _ in ()).throw(AssertionError("empty_cache is not part of cache update"))
+        try:
+            cache = VectorKVCache(
+                compression_ratio=0.5,
+                approx_ratio=0.1,
+                target_budget=16,
+                max_physical_budget=32,
+                min_recent_tokens=4,
+                w_ols=torch.eye(4).unsqueeze(0).unsqueeze(0),
+            )
+            prefill = torch.randn(1, 2, 32, 4)
+            cache.update(prefill, prefill, layer_idx=0)
+            cache.update(torch.randn(1, 2, 1, 4), torch.randn(1, 2, 1, 4), layer_idx=0)
+            physical = cache._physical_len(0)
+            self.assertEqual(cache._stored_positions[0].shape[-1], physical)
+            self.assertEqual(cache._cached_eps[0].shape[-1], physical)
+            self.assertEqual(cache.accumulated_scores[0].shape[-1], physical)
+            self.assertEqual(
+                cache._retain_indices[0].shape[-1] + cache._approx_indices[0].shape[-1],
+                physical,
+            )
+        finally:
+            torch.cuda.empty_cache = original_empty_cache
 
     def test_vector_rejects_incompatible_budgets(self):
         with self.assertRaisesRegex(ValueError, "requires more physical keys"):
