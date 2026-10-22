@@ -147,7 +147,7 @@ Quy tắc sử dụng:
 - [x] Kiểm tra I1–I5 ở mọi bước.
 - [x] Kiểm tra I6: `compression_ratio=0` cho output greedy giống Full-FP16.
 - [x] Ghi bảng `step | seen_tokens | physical_len | mask_kv_len | position_id | scores_len`.
-- [ ] Kiểm tra NaN, exception và memory bound.
+- [x] Kiểm tra NaN, exception và memory bound.
 
 **Acceptance criteria:**
 
@@ -158,7 +158,7 @@ Quy tắc sử dụng:
 
 **Dependencies:** Phase 2b.
 
-**Phase 3 evidence update (2026-10-22):** I1-I5 pass for H2O and VECTOR over 20 decode steps; I6 no-compression greedy output matches Full-FP16; full pytest passes. Evidence: `logs/phase3_i1_i5_final.log`, `logs/phase3_i6_no_compression_fixed.log`, `logs/phase3_full_pytest.log`. Explicit NaN scan remains pending.
+**Phase 3 evidence update (2026-10-22):** I1-I5 pass for H2O and VECTOR over 20 decode steps; I6 no-compression greedy output matches Full-FP16; NaN and physical memory bound checks pass; full pytest passes. Evidence: `logs/phase3_i1_i5_final.log`, `logs/phase3_i6_no_compression_fixed.log`, `logs/phase3_nan_memory_bound.log`, `logs/phase3_full_pytest.log`.
 
 ### Phase 3 checklist
 
@@ -168,7 +168,7 @@ Quy tắc sử dụng:
 - [x] I6: compression_ratio=0 matches Full-FP16 greedy output
 - [x] Attention mask length matches physical K length
 - [x] Full pytest suite passes
-- [ ] Explicit NaN scan
+- [x] Explicit NaN scan
 
 **Checkpoint:** nếu Phase 3 chưa pass, không chạy benchmark 4096 token.
 
