@@ -82,28 +82,30 @@ Quy tắc sử dụng:
 
 **Evidence:** `logs/phase1_mask_green.log`, `logs/phase1_mask_mutation.log`, `logs/phase1_full_pytest.log`.
 
-## Phase 2 — Hoàn thiện logical/physical length cho H2O và VECTOR
+## Phase 2 — Hoàn thiện logical/physical length cho H2O và VECTOR — COMPLETED
 
 **Mục tiêu:** áp dụng cùng một contract cho hai cache.
 
 **Công việc:**
 
-- [ ] Hoàn thiện `seen_tokens` trong H2O.
-- [ ] Implement và kiểm thử cùng contract trong VECTOR.
-- [ ] Bảo đảm `get_seq_length()` trả logical length.
-- [ ] Bảo đảm `get_mask_sizes()` dùng physical length và query length thực tế.
-- [ ] Kiểm tra mọi layer có cùng physical K length.
-- [ ] Kiểm tra RoPE không bị re-rotate sau prune.
+- [x] Hoàn thiện `seen_tokens` trong H2O.
+- [x] Implement và kiểm thử cùng contract trong VECTOR.
+- [x] Bảo đảm `get_seq_length()` trả logical length.
+- [x] Bảo đảm `get_mask_sizes()` dùng physical length và query length thực tế.
+- [x] Kiểm tra mọi layer có cùng physical K length.
+- [x] Kiểm tra RoPE không bị re-rotate sau prune.
 
 **Acceptance criteria:**
 
-- [ ] I1: position ID token mới bằng `seen_tokens` trước bước decode.
-- [ ] I2: mask KV length bằng K length sau update.
-- [ ] I3: mọi layer có cùng K length.
-- [ ] I4: scores length bằng K length trước/sau hook và prune.
-- [ ] I5: K giữ RoPE theo vị trí gốc.
+- [x] I1: position ID token mới bằng `seen_tokens` trước bước decode.
+- [x] I2: mask KV length bằng K length sau update.
+- [x] I3: mọi layer có cùng K length.
+- [x] I4: scores length bằng K length trước/sau hook và prune.
+- [x] I5: K giữ RoPE theo vị trí gốc.
 
 **Dependencies:** Phase 1.
+
+**Evidence:** `logs/phase2_verify_i1_i5_fixed.log`, `logs/phase2_final_full_pytest.log`.
 
 ## Phase 2b — Bảo vệ memory budget và peak memory
 
@@ -198,6 +200,6 @@ Mỗi phase chỉ commit sau khi verification tương ứng hoàn tất:
 
 ## Trạng thái dừng hiện tại
 
-**Đang ở Phase 2 — hoàn thiện logical/physical length cho H2O và VECTOR.**
+**Đang ở Phase 2b — bảo vệ memory budget và peak memory.**
 
-Phase 0 đã xác nhận decode hiện tại có `position_id=64` và mask length 32 khớp physical K length 32 ở cả hai layer. Phase 1 đã chuẩn hóa test contract mask và full suite pass 33 test. Phase 0 cũng xác nhận prefill vẫn lưu 64 token dù `active_budget=32`; đây là blocker memory cần xử lý ở Phase 2b.
+Phase 0 đã xác nhận decode hiện tại có `position_id=64` và mask length 32 khớp physical K length 32 ở cả hai layer. Phase 1 đã chuẩn hóa test contract mask. Phase 2 đã pass I1–I5 cho H2O và VECTOR trong 20 bước decode. Phase 0 cũng xác nhận prefill vẫn lưu 64 token dù `active_budget=32`; đây là blocker memory cần xử lý ở Phase 2b.

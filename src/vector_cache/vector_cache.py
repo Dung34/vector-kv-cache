@@ -160,7 +160,10 @@ class VectorKVCache(DynamicCache):
         elif query_len > 1:
             kv_len = phys_len + query_len
         elif self.active_budget is not None:
-            kv_len = min(phys_len + 1, self.active_budget)
+            _, _, _, kv_len, _ = self.partitioner.compute_budgets(
+                total_len=phys_len + 1,
+                target_budget=self.active_budget,
+            )
         else:
             kv_len = phys_len + 1
         return (kv_len, 0)
