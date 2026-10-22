@@ -53,6 +53,7 @@ class VectorKVCache(DynamicCache):
         self.max_budget = max_budget
         self.active_budget = max_budget
         self.is_prefilling: bool = False
+        self._seen_tokens: int = 0
         self.rope_theta = rope_theta
         self.rotary_emb = rotary_emb
 
@@ -103,11 +104,16 @@ class VectorKVCache(DynamicCache):
         """Loads and formats the W_OLS weights tensor via Reconstructor."""
         self.reconstructor.set_w_ols(w_ols)
 
-    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+    def _physical_len(self, layer_idx: Optional[int] = 0) -> int:
         idx = 0 if layer_idx is None else layer_idx
         if not self._key_cache or idx >= len(self._key_cache) or self._key_cache[idx] is None:
             return 0
         return self._key_cache[idx].shape[-2]
+
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        if self._seen_tokens > 0:
+            return self._seen_tokens
+        return self._physical_len(layer_idx)
 
     def get_mask_sizes(
         self,
@@ -148,8 +154,16 @@ class VectorKVCache(DynamicCache):
                 except Exception:
                     query_len = 0
 
-        past_seen = self.get_seq_length(actual_layer_idx)
-        return (past_seen + query_len, 0)
+        phys_len = self._physical_len(actual_layer_idx)
+        if query_len == 0:
+            kv_len = phys_len
+        elif query_len > 1:
+            kv_len = phys_len + query_len
+        elif self.active_budget is not None:
+            kv_len = min(phys_len + 1, self.active_budget)
+        else:
+            kv_len = phys_len + 1
+        return (kv_len, 0)
 
     def reset_scores(self):
         """Reset cache storage and accumulated scores for a new sequence generation."""
@@ -163,6 +177,7 @@ class VectorKVCache(DynamicCache):
         self.is_pruned = []
         self.active_budget = self.max_budget
         self.is_prefilling = False
+        self._seen_tokens = 0
         if hasattr(self, "layers"):
             self.layers = []
 
@@ -275,6 +290,8 @@ class VectorKVCache(DynamicCache):
         batch_size, num_heads, incoming_len, head_dim = key_states.shape
         device = key_states.device
         dtype = key_states.dtype
+        if layer_idx == 0:
+            self._seen_tokens += incoming_len
         self._ensure_layer_capacity(layer_idx)
 
         # Track positions
