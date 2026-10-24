@@ -65,7 +65,7 @@ Việc còn dở từ lộ trình cũ đã chuyển vào các phase dưới đâ
 Trạng thái: `[ ]` chưa làm · `[~]` đang làm · `[x]` xong (chỉ đánh dấu sau khi review CHẤP NHẬN). Số phiên GPU là ước lượng.
 
 ### Phase 5 — Hạ tầng bằng chứng cho Kaggle/Colab · 💻 + 🟢×1
-- [ ] **5.1** `experiments/_header.py` dùng chung: nonce, timestamp, python/torch/transformers, device, seed, sha256 script, git commit.
+- [x] **5.1** `experiments/_header.py` dùng chung: nonce, timestamp, python/torch/transformers, device, seed, sha256 script, git commit. (Review: `reports/reviews/5.1_experiment_header_review.md`, CHẤP NHẬN 2026-10-24)
 - [ ] **5.2** `notebooks/kaggle_runner.ipynb`: clone theo commit, chạy một script, zip logs.
 - [ ] **5.3** 🟢 `phase5_gpu_smoke.py`: load Qwen2.5-1.5B, 1 bước decode Full; log tải về có đủ header và `[EXIT] code=0`.
 
