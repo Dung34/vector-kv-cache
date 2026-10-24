@@ -31,7 +31,8 @@ Các phương pháp loại bỏ token hiện nay (như H2O, SnapKV, StreamingLLM
 ### 2.3. Cơ sở khoa học mới của Đề tài (VECTOR Plug-in)
 Đề tài dựa trên 2 phát hiện lý thuyết mang tính đột phá từ bài báo *A Simple Plug-in for Improving Eviction-Based KV Cache Compression*:
 1. **Bất đối xứng độ nhạy (Asymmetric Sensitivity):** Vector Key ($K$) nằm trong hàm Softmax chứa số mũ $e^x$, nên sai số của $K$ bị khuếch đại theo hàm mũ; trong khi vector Value ($V$) chỉ lan truyền sai số tuyến tính. Do đó, việc bảo toàn $K$ có ý nghĩa sống còn hơn $V$.
-2. **Tính cộng tuyến K–V (K–V Collinearity):** Do $K$ và $V$ cùng xuất phát từ biểu diễn ẩn $h$, giữa chúng tồn tại mối liên hệ tuyến tính chặt chẽ ($V \approx W_{\text{OLS}} K$) với hệ số xác định $R^2 \in [0.70, 0.94]$. Ta có thể xóa bỏ $V$ để tiết kiệm VRAM và tái tạo lại nó một cách chính xác khi cần.
+2. **Tính cộng tuyến K–V (K–V Collinearity):** Do $K$ và $V$ cùng xuất phát từ biểu diễn ẩn $h$, giữa chúng tồn tại mối liên hệ tuyến tính chặt chẽ ($V \approx W_{\text{OLS}} K$) với hệ số xác định $R^2 \in [0.70, 0.94]$ theo bài báo gốc. Ta có thể xóa bỏ $V$ để tiết kiệm VRAM và tái tạo lại nó khi cần.
+   * *Lưu ý thực nghiệm:* khoảng $R^2$ trên là số liệu của bài báo, chưa phải của đồ án. Đồ án sẽ đo $R^2$ trên tập held-out (Wikitext/C4) cho `Qwen2.5-1.5B-Instruct` theo từng layer/head. Nếu $R^2 < 0.70$, đồ án vẫn tiếp tục, báo cáo đây là một phát hiện, và bổ sung thí nghiệm $p_a$ theo từng layer.
 
 ---
 
@@ -126,7 +127,7 @@ Thử nghiệm trên 4 tỷ lệ nén bộ nhớ ($p_c$):
 
 | Khía cạnh | Bài toán / Tập dữ liệu | Chỉ số đo lường (Metrics) | Mục tiêu kỳ vọng |
 | :--- | :--- | :--- | :--- |
-| **Tiết kiệm Bộ nhớ** | Đo đạc trên GPU khi prefill 8K tokens | Peak VRAM (MB), Cache Compression Ratio (x) | Giảm $\ge 60\%$ VRAM so với Full Cache |
+| **Tiết kiệm Bộ nhớ** | Đo đạc trên GPU: prefill 8K tokens + decode 128 tokens | **(Chính)** Bộ nhớ KV cache lâu dài (MB, đếm mọi tensor cache giữ) và Cache Compression Ratio (x) so với Full. **(Phụ)** Peak VRAM (MB), báo cáo nguyên trạng, tách phần trọng số / attention / KV | Bộ nhớ KV cache giảm $\ge 60\%$ so với Full ở $p_c \ge 75\%$; VECTOR không vượt H2O ở cùng ngân sách; Peak VRAM không kém H2O |
 | **Tốc độ Suy luận** | Vòng lặp sinh 128 tokens | TTFT (ms), Throughput (tokens/second) | Throughput không giảm quá $5\%$ so với H2O gốc |
 | **Truy xuất Đơn kim** | **Single-Needle NIAH** (4K – 16K context) | Retrieval Accuracy (%) hiển thị qua Heatmap | Accuracy đạt $\ge 95\%$ ở mức nén $75\%$, xóa bỏ điểm mù (blind spots) của H2O |
 | **Truy xuất Đa kim** | **Multi-Needle NIAH** (3 – 5 cây kim rải rác) | Multi-key Retrieval Recall & Accuracy (%) | Khắc phục hoàn toàn tình trạng mất dữ kiện; vượt trội H2O gốc từ $15\% - 30\%$ ở mức nén cao ($p_c \ge 75\%$) |
@@ -162,3 +163,12 @@ Thử nghiệm trên 4 tỷ lệ nén bộ nhớ ($p_c$):
    * Biểu đồ nhiệt (Heatmap) thể hiện tỷ lệ tìm kiếm thành công "Single-Needle & Multi-Needle NIAH" theo độ dài ngữ cảnh và vị trí độ sâu.
    * Biểu đồ Pareto (Trade-off) giữa Tỷ lệ nén bộ nhớ (%) và Điểm chất lượng (F1/Accuracy).
 
+
+---
+
+## 8. LỊCH SỬ THAY ĐỔI ĐẶC TẢ (CHANGELOG)
+
+| Ngày | Mục | Thay đổi | Lý do |
+| :--- | :--- | :--- | :--- |
+| 2026-10-24 | §5.4 Tiết kiệm Bộ nhớ (D2) | Chỉ số chính đổi từ Peak VRAM sang bộ nhớ KV cache lâu dài; Peak VRAM thành chỉ số phụ | Ở 8K, KV cache (~224 MB) nhỏ hơn nhiều so với trọng số (~3 GB) và ma trận attention prefill; Peak VRAM không phản ánh tác dụng nén. Xem `tasks/roadmap.md` §1 |
+| 2026-10-24 | §2.3 Tính cộng tuyến K–V (D4) | Ghi rõ $R^2 \in [0.70, 0.94]$ là số của bài báo; đồ án tự đo trên held-out, tiếp tục và báo cáo nếu $R^2 < 0.70$ | W_OLS hiện tại có $R^2$ trung bình 0.517, 28/28 layer < 0.70 (`logs/review_roadmap_r2.log`) |
