@@ -4,6 +4,34 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## 0. Quy trình làm việc (từ 2026-10-25; đọc trước mọi mục khác)
+
+### Vai trò
+- **Người dùng:** ra quyết định; đưa nonce cho lần chạy ở chế độ Bằng chứng; chỉ chạy Kaggle khi GPU cục bộ không đủ.
+- **Người hướng dẫn (Claude):** viết **một brief cho mỗi milestone** trong `tasks/roadmap.md`; review **một lần** khi milestone xong, bằng cách tự chạy lệnh kiểm tra trong brief; cập nhật roadmap. Lỗi ghi chép nhỏ thì người hướng dẫn tự đính chính, không trả lại.
+- **Agent code:** làm trọn một milestone: viết code, **tự chạy thí nghiệm** trên GPU cục bộ, tự lặp đến khi đạt tiêu chí chấp nhận hoặc bị chặn, rồi viết báo cáo ngắn.
+
+### Hai chế độ
+| | **Thăm dò** (mặc định, R0–R5, R7) | **Bằng chứng** (R6: số liệu đưa vào báo cáo) |
+|---|---|---|
+| Mục đích | làm cho chạy đúng, tìm lỗi, ước lượng kết quả | chốt con số cho báo cáo đồ án |
+| Áp dụng §6 | **chỉ** §6.A, §6.D (không gõ số tay; pass/fail phải được tính), §6.G (trung thực khi kết quả xấu), §6.H (dừng sau 2 lần cùng một hướng sửa thất bại) | **toàn bộ** §6 |
+| Nonce, 3 log hai chiều, trích dẫn số dòng | không bắt buộc | bắt buộc |
+| Kết quả | script tự ghi ra `results/<milestone>/` (json/csv) kèm cấu hình chạy; báo cáo trích **đường dẫn file**, không trích số dòng | như §6.C, §6.I |
+
+### Quy tắc tiết kiệm thời gian và quota
+1. **GPU cục bộ trước** (RTX 3050 4 GB, `.venv_gpu`). Kaggle T4 chỉ cho job cần > 4 GB; khi đó agent chuẩn bị sẵn một script chạy được bằng một lệnh.
+2. **Thử nhỏ trước khi chạy lớn:** mọi job dài phải chạy một bản cỡ nhỏ (vài mẫu, ngữ cảnh ngắn) trước, và có kiểm tra tự động khi chạy (NaN, shape, số token giữ lại).
+3. Mỗi script có tham số `--limit` (số mẫu) và tự lưu kết quả từng phần, để job bị ngắt không mất hết.
+4. **Bị chặn thì báo ngay** (thiếu quyền, lỗi môi trường, kết quả lệch xa paper). Không tự đổi mục tiêu của brief.
+5. Không sửa file ngoài phạm vi brief. Không commit; người hướng dẫn commit sau khi review.
+
+### Báo cáo milestone (`reports/<R?>_<tên>.md`, tối đa khoảng 1 trang)
+1. **Đã làm gì**, và chỗ nào khác với brief hoặc với paper.
+2. **Cách chạy lại:** các lệnh nguyên văn.
+3. **Kết quả:** bảng sinh từ file trong `results/` (ghi đường dẫn); so với số của paper nếu có.
+4. **Vấn đề, nghi ngờ, việc chưa làm.** Nhãn [QUAN SÁT] / [SUY LUẬN] / [CHƯA KIỂM CHỨNG] chỉ bắt buộc cho các khẳng định về kết quả.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -74,7 +102,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
   - Always export primary classes at package `__init__.py`. External code (scripts, notebooks, benchmarks) must never break when internal files are decomposed.
 - **TDD for Submodules:** Every extracted submodule MUST have its own standalone unit test running in $< 0.1\text{s}$ on CPU with mock tensors.
 
-## 6. Giao thức bằng chứng (Evidence Protocol - Ưu tiên cao hơn mọi chỉ dẫn khác)
+## 6. Giao thức bằng chứng (Evidence Protocol - Ưu tiên cao hơn mọi chỉ dẫn khác; phạm vi áp dụng theo chế độ ở §0)
 
 ### A. Nguyên tắc
 Một kết quả chỉ tồn tại nếu nó nằm trong file log do một lệnh thật sinh ra trong phiên này.
