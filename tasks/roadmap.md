@@ -67,7 +67,7 @@ Trạng thái: `[ ]` chưa làm · `[~]` đang làm · `[x]` xong (chỉ đánh 
 ### Phase 5 — Hạ tầng bằng chứng cho Kaggle/Colab · 💻 + 🟢×1
 - [x] **5.1** `experiments/_header.py` dùng chung: nonce, timestamp, python/torch/transformers, device, seed, sha256 script, git commit. (Review: `reports/reviews/5.1_experiment_header_review.md`, CHẤP NHẬN 2026-10-24)
 - [x] **5.2** `notebooks/kaggle_runner.ipynb` + `experiments/run_exp.sh` (UTF-8): clone theo commit, chạy một script, zip logs. (Review: `reports/reviews/5.2_kaggle_runner_review.md`, CHẤP NHẬN 2026-10-25)
-- [ ] **5.3** 🟢 `phase5_gpu_smoke.py`: load Qwen2.5-1.5B, 1 bước decode Full; log tải về có đủ header và `[EXIT] code=0`.
+- [~] **5.3** 🟢 `phase5_gpu_smoke.py`: load Qwen2.5-1.5B, 1 bước decode Full; log tải về có đủ header và `[EXIT] code=0`.
 - [ ] **5.4** 💻 Một runner duy nhất: dùng `experiments/run_exp.sh` (từ 5.2) cho cả local (Git Bash) lẫn Kaggle; đánh dấu `run_exp.ps1` lỗi thời; cập nhật lệnh chạy trong `CLAUDE.md`. Log cũ dạng UTF-16 giữ nguyên, không chuyển đổi. Phụ thuộc: 5.2 được CHẤP NHẬN. (Chốt 2026-10-24: phương án b)
 
 ### Phase 6 — Đo hiện trạng, chưa sửa · 💻 + 🟢×1
